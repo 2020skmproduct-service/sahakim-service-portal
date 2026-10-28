@@ -32,9 +32,9 @@
                 </div>
             </div>
             <div class="flex items-center gap-2">
-                <button onclick="openGoogleSheetModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5">
-                    <i class="fa-solid fa-table"></i>
-                    <span id="gsheet-status-badge">เชื่อม Google Sheet / AppSheet</span>
+                <button onclick="openQrShareModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5">
+                    <i class="fa-solid fa-qrcode"></i>
+                    <span class="hidden sm:inline">QR Code แจ้งซ่อม</span>
                 </button>
                 <div id="header-nav" class="flex items-center space-x-2"></div>
             </div>
@@ -249,6 +249,38 @@
             }
             const m = document.getElementById('gsheet-modal');
             if (m) m.remove();
+        }
+
+        function openQrShareModal() {
+            const currentUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
+                ? window.location.href
+                : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            const qrApiUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=10&data=' + encodeURIComponent(currentUrl);
+            let modalBg = document.createElement('div');
+            modalBg.id = 'qr-modal';
+            modalBg.className = 'fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 overflow-y-auto';
+            modalBg.innerHTML = `
+                <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4 text-center text-xs sm:text-sm">
+                    <div class="flex justify-between items-center border-b pb-2">
+                        <h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-qrcode text-orange-500 mr-2"></i> QR Code & ลิงก์ระบบแจ้งซ่อมออนไลน์</h3>
+                        <button onclick="document.getElementById('qr-modal').remove()" class="text-xl font-bold cursor-pointer no-print">&times;</button>
+                    </div>
+                    <div class="border-2 border-slate-900 rounded-2xl p-5 bg-slate-50 space-y-2">
+                        <p class="text-[11px] font-bold text-orange-600 uppercase tracking-wider">SAHA KIM MOTOR CO., LTD.</p>
+                        <h4 class="text-base font-extrabold text-slate-900">สแกน QR Code เพื่อแจ้งซ่อม / ติดตามงาน</h4>
+                        <div class="bg-white p-3 rounded-xl border inline-block mx-auto shadow-sm">
+                            <img src="${qrApiUrl}" alt="QR Code Saha Kim Motor" class="w-48 h-48 mx-auto" />
+                        </div>
+                        <p class="text-xs font-bold text-slate-800 pt-1">บริษัท สหคิมมอเตอร์ จำกัด</p>
+                        <p class="text-[11px] text-slate-500 break-all">${currentUrl}</p>
+                    </div>
+                    <div class="flex flex-wrap justify-center gap-2 pt-2 no-print">
+                        <button type="button" onclick="navigator.clipboard.writeText('${currentUrl}'); alert('คัดลอกลิงก์เรียบร้อย! ส่งเข้า LINE ให้ลูกค้าหรือทีมงานได้เลย');" class="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold cursor-pointer"><i class="fa-solid fa-link mr-1"></i> คัดลอกลิงก์</button>
+                        <button type="button" onclick="window.print()" class="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> พิมพ์สติกเกอร์ QR ติดเครื่องจักร</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modalBg);
         }
 
         function playAlertSound() {
@@ -706,6 +738,7 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-2 text-xs">
                             ${state.userRole === 'SUPERVISOR' ? `
+                                <button onclick="openGoogleSheetModal()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-database text-emerald-400 mr-1"></i> <span id="gsheet-status-badge">ตั้งค่าฐานข้อมูล Google Sheet (Admin)</span></button>
                                 <button onclick="openTechnicianManager()" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-users-gear mr-1"></i> จัดการพนักงาน (เพิ่ม/ลบ/รหัส)</button>
                             ` : ''}
                             <button onclick="exportToExcel()" class="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-file-excel mr-1"></i> Export Excel</button>
