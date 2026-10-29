@@ -61,8 +61,10 @@
             "EBARA", "GRUNDFOS", "SIEMENS", "ABB"
         ];
 
-        const GAS_CODE_TEMPLATE = "// ============================================================================\n// SAHA KIM MOTOR V12.1 - GOOGLE SHEETS & APPSHEET BACKEND (Code.gs)\n// วิธีใช้งาน:\n// 1. สร้างไฟล์ Google Sheet ใหม่ -> ไปที่เมนู ส่วนขยาย (Extensions) > Apps Script\n// 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กดบันทึก (ไอคอนแผ่นดิสก์)\n// 3. กดปุ่ม \"ทำให้ใช้งานได้\" (Deploy) > \"การทำให้ใช้งานได้รายการใหม่\" (New deployment)\n// 4. เลือกประเภทเป็น \"เว็บแอป\" (Web app)\n//    - ดำเนินการในฐานะ (Execute as): \"ฉัน\" (Me)\n//    - ผู้ที่มีสิทธิ์เข้าถึง (Who has access): \"ทุกคน\" (Anyone)\n// 5. กด Deploy แล้วคัดลอก Web App URL (ลงท้ายด้วย /exec) มาวางในหน้าเว็บ Saha Kim Motor\n// ============================================================================\n\nconst SHEET_TICKETS = 'Tickets';\n\nfunction setupSheets() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  let sheet = ss.getSheetByName(SHEET_TICKETS);\n  if (!sheet) {\n    sheet = ss.insertSheet(SHEET_TICKETS);\n    sheet.appendRow([\n      'TicketID',\n      'Company',\n      'TaxID',\n      'DocNo',\n      'Contact',\n      'SiteContact',\n      'Location',\n      'Warranty',\n      'ServiceType',\n      'Urgency',\n      'DesiredDate',\n      'ConfirmedDate',\n      'Status',\n      'AssignedTech',\n      'ApprovedBySupervisor',\n      'EquipmentSummary',\n      'CreatedAt',\n      'RawJson'\n    ]);\n    sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n  }\n  return sheet;\n}\n\nfunction doGet(e) {\n  const sheet = setupSheets();\n  const rows = sheet.getDataRange().getValues();\n  const tickets = [];\n  for (let i = 1; i < rows.length; i++) {\n    const rawJson = rows[i][17];\n    if (rawJson) {\n      try {\n        tickets.push(JSON.parse(rawJson));\n      } catch (err) {}\n    }\n  }\n  return ContentService\n    .createTextOutput(JSON.stringify({ status: 'ok', tickets: tickets }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    const sheet = setupSheets();\n    const payload = JSON.parse(e.postData.contents);\n    const tickets = payload.tickets || [];\n\n    if (sheet.getLastRow() > 1) {\n      sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).clearContent();\n    }\n\n    const rowsToWrite = tickets.map(function(t) {\n      const eqSummary = (t.equipmentList || []).map(function(eq) {\n        return eq.type + ' (' + eq.brand + ' ' + (eq.model || '') + '): ' + eq.symptom;\n      }).join(' | ');\n\n      return [\n        t.id || '',\n        t.company || '',\n        t.taxId || '',\n        t.docNo || '',\n        t.contact || '',\n        t.siteContact || '',\n        t.location || '',\n        t.warranty || '',\n        t.serviceType || '',\n        t.urgency || '',\n        t.desiredDate || '',\n        t.confirmedDate || '',\n        t.status || '',\n        t.assignedTech || '',\n        t.approvedBySupervisor || '',\n        eqSummary,\n        t.createdAt || '',\n        JSON.stringify(t)\n      ];\n    });\n\n    if (rowsToWrite.length > 0) {\n      sheet.getRange(2, 1, rowsToWrite.length, 18).setValues(rowsToWrite);\n    }\n\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'ok', count: rowsToWrite.length }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}";
+        const GAS_CODE_TEMPLATE = "// ============================================================================\n// SAHA KIM MOTOR V12.1 - GOOGLE SHEETS + APPSHEET + LINE OA NOTIFICATION (Code.gs)\n// วิธีใช้งาน:\n// 1. เปิด Google Sheet -> ไปที่เมนู ส่วนขยาย (Extensions) > Apps Script\n// 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กดบันทึก (ไอคอนแผ่นดิสก์)\n// 3. กดปุ่ม \"ทำให้ใช้งานได้\" (Deploy) > \"จัดการการทำให้ใช้งานได้\" (Manage deployments)\n//    หรือ \"การทำให้ใช้งานได้รายการใหม่\" (New deployment) -> เลือกประเภท \"เว็บแอป\" (Web app)\n//    - ดำเนินการในฐานะ (Execute as): \"ฉัน\" (Me)\n//    - ผู้ที่มีสิทธิ์เข้าถึง (Who has access): \"ทุกคน\" (Anyone)\n// 4. คัดลอก Web App URL (ลงท้ายด้วย /exec) มาวางในหน้าตั้งค่าของ Supervisor\n// ============================================================================\n\nconst SHEET_TICKETS = 'Tickets';\n\nfunction setupSheets() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  let sheet = ss.getSheetByName(SHEET_TICKETS);\n  if (!sheet) {\n    sheet = ss.insertSheet(SHEET_TICKETS);\n    sheet.appendRow([\n      'TicketID',\n      'Company',\n      'TaxID',\n      'DocNo',\n      'Contact',\n      'SiteContact',\n      'Location',\n      'Warranty',\n      'ServiceType',\n      'Urgency',\n      'DesiredDate',\n      'ConfirmedDate',\n      'Status',\n      'AssignedTech',\n      'ApprovedBySupervisor',\n      'EquipmentSummary',\n      'CreatedAt',\n      'RawJson'\n    ]);\n    sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n  }\n  return sheet;\n}\n\n// ฟังก์ชันออก LINE Access Token อัตโนมัติจาก Channel ID (2012276060) & Secret (@389fyhbl)\nfunction getValidLineToken(customToken) {\n  if (customToken && String(customToken).trim().length > 30) {\n    return String(customToken).trim();\n  }\n  const props = PropertiesService.getScriptProperties();\n  const saved = props.getProperty('LINE_TOKEN');\n  if (saved && saved.trim().length > 30) {\n    return saved.trim();\n  }\n  try {\n    const res = UrlFetchApp.fetch('https://api.line.me/v2/oauth/accessToken', {\n      method: 'post',\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n      payload: 'grant_type=client_credentials&client_id=2012276060&client_secret=db6f7a7f17771925cc3dd2ff0aa38ab5',\n      muteHttpExceptions: true\n    });\n    const data = JSON.parse(res.getContentText());\n    if (data && data.access_token) {\n      props.setProperty('LINE_TOKEN', data.access_token);\n      return data.access_token;\n    }\n  } catch (e) {\n    Logger.log('LINE OAuth Error: ' + e);\n  }\n  return '';\n}\n\n// ฟังก์ชันส่งข้อความแจ้งเตือนเข้า LINE Official Account (Push เข้ากลุ่ม หรือ Broadcast หาเพื่อนทุกคนของบอท)\nfunction sendLinePush(channelToken, targetId, messageText) {\n  const token = getValidLineToken(channelToken);\n  if (!token || !messageText) return;\n  const cleanTarget = targetId ? String(targetId).trim() : '';\n  try {\n    if (cleanTarget && cleanTarget !== 'BROADCAST') {\n      const pushRes = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {\n        method: 'post',\n        headers: {\n          'Content-Type': 'application/json',\n          'Authorization': 'Bearer ' + token\n        },\n        payload: JSON.stringify({\n          to: cleanTarget,\n          messages: [{ type: 'text', text: messageText }]\n        }),\n        muteHttpExceptions: true\n      });\n      if (pushRes.getResponseCode() >= 200 && pushRes.getResponseCode() < 300) {\n        return;\n      }\n    }\n    // หากไม่ได้ระบุ Group ID ให้ส่งแบบ Broadcast หาทุกคนที่เป็นเพื่อนกับบอท @389fyhbl อัตโนมัติ\n    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {\n      method: 'post',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': 'Bearer ' + token\n      },\n      payload: JSON.stringify({\n        messages: [{ type: 'text', text: messageText }]\n      }),\n      muteHttpExceptions: true\n    });\n  } catch (err) {\n    Logger.log('LINE Notify Error: ' + err);\n  }\n}\n\nfunction doGet(e) {\n  const sheet = setupSheets();\n  const rows = sheet.getDataRange().getValues();\n  const tickets = [];\n  for (let i = 1; i < rows.length; i++) {\n    const rawJson = rows[i][17];\n    if (rawJson) {\n      try {\n        tickets.push(JSON.parse(rawJson));\n      } catch (err) {}\n    }\n  }\n  return ContentService\n    .createTextOutput(JSON.stringify({ status: 'ok', tickets: tickets }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    const props = PropertiesService.getScriptProperties();\n    const payload = JSON.parse(e.postData.contents);\n\n    // บันทึก Token ไว้ในระบบ Apps Script อัตโนมัติเมื่อหน้าเว็บส่งมา\n    if (payload.lineChannelToken) {\n      props.setProperty('LINE_TOKEN', payload.lineChannelToken.trim());\n    }\n    if (payload.lineTargetId) {\n      props.setProperty('LINE_TARGET_ID', payload.lineTargetId.trim());\n    }\n\n    // กรณี LINE Webhook ยิงเข้ามาเมื่อเชิญบอทเข้ากลุ่ม หรือพิมพ์ข้อความในกลุ่ม LINE\n    if (payload.events && payload.events.length > 0) {\n      const ev = payload.events[0];\n      const savedToken = getValidLineToken('');\n      if (ev.source && ev.source.groupId) {\n        // จำ Group ID ของกลุ่มล่าสุดอัตโนมัติทันทีที่เชิญบอทเข้ากลุ่มหรือมีคนพิมพ์ในกลุ่ม\n        props.setProperty('LINE_GROUP_ID', ev.source.groupId);\n      }\n      if (ev.replyToken && ev.source && savedToken) {\n        const idInfo = ev.source.groupId\n          ? '✅ เชื่อมต่อกลุ่ม LINE สำเร็จ!\\nGroup ID ของกลุ่มนี้คือ:\\n' + ev.source.groupId\n          : '✅ เชื่อมต่อบอท สหคิมมอเตอร์ สำเร็จ!\\nUser ID ของคุณคือ:\\n' + ev.source.userId;\n        const msgTxt = (ev.message && ev.message.text) ? ev.message.text.trim() : '';\n        if (ev.type === 'join' || msgTxt === '/id' || msgTxt === 'id' || msgTxt.indexOf('สวัสดี') !== -1) {\n          UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {\n            method: 'post',\n            headers: {\n              'Content-Type': 'application/json',\n              'Authorization': 'Bearer ' + savedToken\n            },\n            payload: JSON.stringify({\n              replyToken: ev.replyToken,\n              messages: [{ type: 'text', text: idInfo }]\n            }),\n            muteHttpExceptions: true\n          });\n        }\n      }\n      return ContentService.createTextOutput(JSON.stringify({ status: 'line_webhook_ok' })).setMimeType(ContentService.MimeType.JSON);\n    }\n\n    // ส่งแจ้งเตือนเข้า LINE ทันทีหากมีข้อความแจ้งเตือนส่งมาด้วย\n    if (payload.lineNotifyText) {\n      const tokenToUse = getValidLineToken(payload.lineChannelToken);\n      const targetToUse = payload.lineTargetId || props.getProperty('LINE_TARGET_ID') || props.getProperty('LINE_GROUP_ID') || '';\n      if (tokenToUse) {\n        sendLinePush(tokenToUse, targetToUse, payload.lineNotifyText);\n      }\n    }\n\n    // บันทึกข้อมูลลง Google Sheets\n    if (Array.isArray(payload.tickets)) {\n      const sheet = setupSheets();\n      const tickets = payload.tickets;\n\n      if (sheet.getLastRow() > 1) {\n        sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).clearContent();\n      }\n\n      const rowsToWrite = tickets.map(function(t) {\n        const eqSummary = (t.equipmentList || []).map(function(eq) {\n          return eq.type + ' (' + eq.brand + ' ' + (eq.model || '') + '): ' + eq.symptom;\n        }).join(' | ');\n\n        return [\n          t.id || '',\n          t.company || '',\n          t.taxId || '',\n          t.docNo || '',\n          t.contact || '',\n          t.siteContact || '',\n          t.location || '',\n          t.warranty || '',\n          t.serviceType || '',\n          t.urgency || '',\n          t.desiredDate || '',\n          t.confirmedDate || '',\n          t.status || '',\n          t.assignedTech || '',\n          t.approvedBySupervisor || '',\n          eqSummary,\n          t.createdAt || '',\n          JSON.stringify(t)\n        ];\n      });\n\n      if (rowsToWrite.length > 0) {\n        sheet.getRange(2, 1, rowsToWrite.length, 18).setValues(rowsToWrite);\n      }\n    }\n\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'ok' }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}";
         let gasWebAppUrl = localStorage.getItem('sahakim_gas_url') || "";
+        let lineChannelToken = localStorage.getItem('sahakim_line_token') || "";
+        let lineTargetId = localStorage.getItem('sahakim_line_target') || "";
 
         let customEquipList = JSON.parse(localStorage.getItem('sahakim_custom_equip_types') || JSON.stringify([]));
         let customBrandList = JSON.parse(localStorage.getItem('sahakim_custom_brands') || JSON.stringify([]));
@@ -140,10 +142,11 @@
 
         let knowledgeTemplates = JSON.parse(localStorage.getItem('sahakim_knowledge_templates') || JSON.stringify([{"id":"TPL-EASA-01","title":"มอเตอร์ขดลวดไหม้ / ค่าฉนวนต่ำ (EASA AR100 & IEEE 43)","category":"MOTOR","sourceRef":"EASA AR100 / IEEE Std 43 / BULL POWER & BROOK CROMPTON Manual","analysis":"วัดค่าความต้านทานฉนวน (Insulation Resistance) ด้วย Megger 500VDC ได้ต่ำกว่าเกณฑ์มาตรฐาน IEEE 43 (< 100 MΩ) และพบกลิ่นไหม้ที่ขดลวดสเตเตอร์เนื่องจากความร้อนสะสมเกินพิกัด (Thermal Overload Class F/H)","cause":"แรงดันไฟฟ้าไม่สมดุล (Voltage Unbalance > 1%) หรือเกิดภาวะ Single Phasing / ทำงานเกินพิกัดกระแสต่อเนื่อง (Overload) ร่วมกับการระบายความร้อนไม่เพียงพอ","correctiveAction":"พันขดลวดสเตเตอร์ใหม่ด้วยลวดทองแดงเคลือบน้ำยา Class H อาบวานิชอบแห้งตามมาตรฐาน EASA AR100 เปลี่ยนตลับลูกปืนทั้งด้าน DE/NDE และทดสอบเดินตัวเปล่า (No-Load Test) วัดกระแสทั้ง 3 เฟสให้สมดุล","recommendedChecklist":["Measure 3-Phase Supply Voltage Unbalance (< 1% per NEMA MG1)","Polarization Index (PI) & Megger Insulation Test at 500/1000 VDC"]},{"id":"TPL-PUMP-01","title":"ปั๊มเกิดโพรงอากาศ / เสียงดังคล้ายกรวดและแรงดันตก (Cavitation)","category":"PUMP","sourceRef":"Karassik's Pump Handbook (4th Ed.) / Hydraulic Institute / STAC & UNOMACH Guide","analysis":"เกิดเสียงดังรัวคล้ายเม็ดกรวดกระทบภายในเรือนปั๊ม (Volute Casing) ร่วมกับค่าความสั่นสะเทือนสูงผิดปกติ และเข็มเกจวัดแรงดันด้านส่ง (Discharge Pressure) สั่นแกว่งเนื่องจากเกิดภาวะโพรงอากาศ (Suction Cavitation: NPSHa < NPSHr)","cause":"ท่อทางดูด (Suction Line) หรือ Strainer อุดตันทำให้เกิด Pressure Drop สูง หรือระดับน้ำฝั่งดูดต่ำกว่าค่าออกแบบ (Insufficient Submergence / High Suction Lift)","correctiveAction":"ถอดล้างทำความสะอาด Y-Strainer และตรวจสอบวาล์วทางดูด ตรวจสอบรอยรั่วอากาศฝั่งท่อดูด (Suction Air Ingress) ตรวจสอบสภาพใบพัด (Impeller) หากสึกกร่อนมากให้เปลี่ยนใบพัดและ Wear Ring ใหม่พร้อมทำ Dynamic Balancing ตามมาตรฐาน ISO 1940 G6.3","recommendedChecklist":["Suction Compound Gauge Vacuum Reading & Strainer Differential Check","Impeller Vane Pitting & Wear Ring Radial Clearance Measurement"]},{"id":"TPL-PUMP-02","title":"ซีลกันรั่วซึม / ตลับลูกปืนร้อนและสั่นสะเทือนสูง (Misalignment & Seal Failure)","category":"PUMP","sourceRef":"Karassik's Pump Handbook / VARISCO & FYBROC Maintenance Manual / ISO 10816","analysis":"พบการรั่วซึมของของเหลวออกทางชุด Mechanical Seal อย่างต่อเนื่อง และอุณหภูมิเสื้อลูกปืน (Bearing Housing) สูงเกิน 85°C ร่วมกับค่า Vibration เกินเกณฑ์มาตรฐาน ISO 10816","cause":"เกิดจากการเยื้องศูนย์ของเพลาปั๊มและมอเตอร์ (Angular / Parallel Shaft Misalignment) หรือเกิดภาวะเดินปั๊มตัวเปล่าโดยไม่มีน้ำหล่อเลี้ยงซีล (Dry Running / Thermal Shock)","correctiveAction":"ถอดเปลี่ยนชุด Mechanical Seal (SiC/SiC/Viton) และตลับลูกปืนใหม่ ตรวจสอบค่าความคดของเพลา (Shaft Runout TIR ≤ 0.05 mm) และทำ Laser Shaft Alignment หน้างานให้ได้ค่าความคลาดเคลื่อนไม่เกิน ±0.05 mm พร้อมตรวจสอบความเครียดท่อ (Pipe Strain)","recommendedChecklist":["Shaft Runout (TIR) & Coupling Angular/Parallel Alignment Check","Pipe Strain Check on Suction & Discharge Flanges"]},{"id":"TPL-SEWAGE-01","title":"ปั๊มจุ่มน้ำเสียตัด Overload / ใบพัดติดขัดและน้ำเข้าห้องน้ำมัน","category":"SEWAGE","sourceRef":"Submersible Sewage Pump Handbook / UNOMACH & VARISCO Troubleshooting Guide","analysis":"เบรกเกอร์และ Overload Relay ทริปทันทีเมื่อสั่งสตาร์ท ตรวจพบเศษขยะพันติดใบพัด (Impeller Jamming) และพบน้ำปนเปื้อนในห้องน้ำมันซีล (Oil Chamber Emulsified) ทำให้ซีลตัวล่างสึกหรอ","cause":"ขยะเส้นใยยาวหรือของแข็งเกินขนาดผ่านเข้าใบพัดทำให้เพลาล็อก (Locked Rotor Current สูง 6-7 เท่า) และทำลายผิวหน้าสัมผัส Mechanical Seal","correctiveAction":"ถอดล้างสิ่งอุดตันในเรือนปั๊มและใบพัด เปลี่ยนชุด Double Mechanical Seal และถ่ายเปลี่ยนน้ำมันหล่อลื่น Food Grade / Turbine Oil VG32 ในห้องซีล อบไล่ความชื้นขดลวดและอัดอีพ็อกซี่ที่ขั้วสายไฟ (Cable Entry) ใหม่","recommendedChecklist":["Oil Chamber Dielectric & Moisture Inspection","Submersible Cable Insulation & Float Switch Level Check"]},{"id":"TPL-CTRL-01","title":"ตู้คอนโทรลทริป / Magnetic Contactor หน้าสัมผัสไหม้ / VFD Fault","category":"CONTROL","sourceRef":"IEC 60947-4-1 / EASA Electrical Testing & Control Panel Troubleshooting","analysis":"ตรวจพบรอยอาร์คและหน้าสัมผัส (Contact Tips) ของ Magnetic Contactor สึกหรอไม่เท่ากัน ส่งผลให้แรงดันไฟฟ้าตกคร่อมเฟสและทำให้ Thermal Overload หรือ VFD แจ้งเตือน Overcurrent / Phase Loss","cause":"เกิดจากการสตาร์ท-หยุดบ่อยครั้ง (Frequent Jogging/Starting) หรือขั้วต่อสายไฟหลวมทำให้เกิดความร้อนสูงที่จุดต่อ (Loose Terminal Hot Spot)","correctiveAction":"เปลี่ยนชุด Magnetic Contactor และ Overload Relay ให้ตรงตามพิกัดกระแส (AC-3 Duty) ขันกวดขั้วต่อสายกำลังทั้งหมดตามค่า Torque มาตรฐาน ตั้งค่าพารามิเตอร์ Ramp-up/Ramp-down และ Current Limit ใน VFD/Soft Starter ใหม่","recommendedChecklist":["Contactor Contact Voltage Drop & Phase Balance Test","Overload Relay Trip Current Setting vs Motor Nameplate FLA"]}]));
         let savedSupPassword = localStorage.getItem('sahakim_sup_pass') || "admin123";
+        let savedServicePin = localStorage.getItem('sahakim_service_pin') || "1234";
         let savedTechs = localStorage.getItem('sahakim_technicians');
-        let initialTechs = savedTechs ? JSON.parse(savedTechs) : [{"id":"TECH-01","name":"ช่างวิชัย มือทอง","specialization":"PUMP & MOTOR EXPERT (EASA / HYDRAULIC)","status":"Available","pin":"1111"},{"id":"TECH-02","name":"ช่างสมชาย ช่างกล","specialization":"BLOWER, AERATOR & CONTROL EXPERT","status":"On Duty","pin":"2222"},{"id":"TECH-03","name":"ช่างประเสริฐ ซ่อมไว","specialization":"FIRE PUMP, SEWAGE & GEN SET EXPERT","status":"Available","pin":"3333"}];
+        let initialTechs = savedTechs ? JSON.parse(savedTechs) : [{"id":"TECH-01","name":"ช่างวิชัย มือทอง","specialization":"PUMP & MOTOR EXPERT","status":"Available","pin":"1111"},{"id":"TECH-02","name":"ช่างสมชาย ช่างกล","specialization":"BLOWER & PANEL EXPERT","status":"On Duty","pin":"2222"},{"id":"TECH-03","name":"ช่างประเสริฐ ซ่อมไว","specialization":"FIRE PUMP & GENSET","status":"Available","pin":"3333"}];
         let savedTickets = localStorage.getItem('sahakim_tickets_v121');
-        let initialTickets = savedTickets ? JSON.parse(savedTickets) : [{"id":"SKM-69-001","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"DOC-2026-001","contact":"คุณสมชาย (081-234-5678)","siteContact":"คุณสมชาย หน้างาน (081-234-5678)","location":"โรงงาน 1 นิคมอุตสาหกรรมบางปู","warranty":"In-Warranty (อยู่ในประกัน - ฟรี / FOC)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วนที่สุด (Urgent)","desiredDate":"2026-03-15","confirmedDate":"2026-03-15 (ยืนยันโดย Service Support)","status":"PENDING_SUPERVISOR_APPROVAL","isLocked":false,"rejectReason":"","createdAt":"2026-03-01 09:30","equipmentList":[{"type":"BOOSTER PUMP","brand":"STAC","model":"CDX 200/25","tag":"BP-01","symptom":"ปั๊มไม่ทำงาน / ตัด Overload","detail":"เบรกเกอร์ทริปทันทีเมื่อกดสตาร์ท","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":["https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600"],"analysis":"วัดค่าฉนวนขดลวดมอเตอร์ (Megger 500VDC) ได้ 0.5 MΩ ต่ำกว่ามาตรฐาน IEEE 43 / EASA AR100 ขดลวดสเตเตอร์ไหม้เนื่องจากกระแสเกินพิกัดและตลับลูกปืนด้านขับ (DE) ฝืด","cause":"Mechanical Bearing Seizure & Stator Winding Burnout","standardsReference":"EASA AR100 / IEEE Std 43 / Karassik's Pump Handbook","faultOrigin":"เกิดจากผลิตภัณฑ์ / อยู่ในประกัน (ฟรี / FOC)","correctiveAction":"พันขดลวดมอเตอร์ใหม่ด้วยลวด Class H อาบวานิชตามมาตรฐาน EASA AR100 เปลี่ยนตลับลูกปืนทั้งสองด้าน และตั้ง Laser Alignment เพลาปั๊ม-มอเตอร์ใหม่","parts":[{"name":"Bearing 6308 ZZ C3","qty":2,"unit":"PCS","price":1200,"total":2400}],"partsApproved":true,"checklistResults":[{"item":"Pump-Motor Laser / Dial Alignment & Coupling Inspection (Pump Handbook)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Insulation Resistance Test (Megger Motor Winding)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Mechanical Seal / Gland Packing Leakage & Flushing Line Check","beforeStatus":"OK","afterStatus":"OK"},{"item":"Suction & Discharge Pressure Gauge (NPSHa vs NPSHr / Cavitation Check)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Impeller Wear Ring Clearance & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK"}]}],"assignedTech":"ช่างวิชัย มือทอง","approvedBySupervisor":""},{"id":"SKM-69-002","company":"บริษัท ไทยเคมีคอล เอ็นจิเนียริ่ง จำกัด","taxId":"0105558098765","docNo":"DOC-2026-014","contact":"คุณนภา ฝ่ายวิศวกรรม (089-456-7890)","siteContact":"คุณกิตติ วิศวกรประจำโรงงาน (089-456-7890)","location":"นิคมอุตสาหกรรมอมตะซิตี้ ชลบุรี เฟส 4","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"PM (Preventive Maintenance)","urgency":"ด่วน (High)","desiredDate":"2026-03-18","confirmedDate":"2026-03-18 (ยืนยันโดย Service Support)","status":"REPAIRING","isLocked":false,"rejectReason":"","createdAt":"2026-03-04 14:15","equipmentList":[{"type":"END SUCTION PUMP","brand":"UNOMACH","model":"ISO 65-200","tag":"ESP-04","symptom":"เสียงดังผิดปกติที่ชุดลูกปืนและมีน้ำรั่วซึมที่ซีล","detail":"เกิดเสียงดังขณะเดินเครื่องที่ 2900 RPM ร่วมกับมอเตอร์ BROOK CROMPTON 15kW","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"Mechanical Seal สึกหรอตามอายุการใช้งาน และเพลาปั๊มเยื้องศูนย์ (Parallel Misalignment 0.18 mm) เกินเกณฑ์มาตรฐาน Pump Handbook","cause":"Normal Wear & Shaft Misalignment Inducing Seal Leakage","standardsReference":"Karassik's Pump Handbook / ISO 10816 Vibration Standard","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"เปลี่ยนชุด Mechanical Seal (SiC/SiC) และตั้ง Alignment Coupling ใหม่ด้วยเครื่องมือวัดละเอียดให้ได้ค่า ≤ 0.05 mm","parts":[{"name":"Mechanical Seal Cartridge 45mm (SiC/SiC)","qty":1,"unit":"SET","price":6500,"total":6500},{"name":"Flexible Coupling Spacer Element","qty":1,"unit":"PCS","price":1850,"total":1850}],"partsApproved":true,"checklistResults":[{"item":"Pump-Motor Laser / Dial Alignment & Coupling Inspection (Pump Handbook)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Insulation Resistance Test (Megger Motor Winding)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Mechanical Seal / Gland Packing Leakage & Flushing Line Check","beforeStatus":"NG","afterStatus":"OK"},{"item":"Suction & Discharge Pressure Gauge (NPSHa vs NPSHr / Cavitation Check)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Impeller Wear Ring Clearance & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK"}]}],"assignedTech":"ช่างสมชาย ช่างกล","approvedBySupervisor":""}];
+        let initialTickets = savedTickets ? JSON.parse(savedTickets) : [{"id":"SKM-69-001","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"DOC-2026-001","contact":"คุณสมชาย (081-234-5678)","siteContact":"คุณสมชาย หน้างาน (081-234-5678)","location":"โรงงาน 1 นิคมอุตสาหกรรมบางปู","warranty":"In-Warranty (อยู่ในประกัน - ฟรี / FOC)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วนที่สุด (Urgent)","desiredDate":"2026-03-15","confirmedDate":"2026-03-15 (ยืนยันโดย Service Support)","status":"CLOSE","isLocked":true,"rejectReason":"","createdAt":"2026-03-01 09:30","equipmentList":[{"type":"BOOSTER PUMP","brand":"EBARA","model":"CDX 200/25","tag":"BP-01","symptom":"ปั๊มไม่ทำงาน / ตัด Overload","detail":"เบรกเกอร์ทริปทันทีเมื่อกดสตาร์ท","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":["https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600"],"analysis":"ขดลวดมอเตอร์ไหม้เนื่องจากกระแสเกินพิกัด","cause":"Mechanical Failure & Winding Burnout","faultOrigin":"เกิดจากผลิตภัณฑ์ / อยู่ในประกัน (ฟรี / FOC)","correctiveAction":"พันขดลวดใหม่และเปลี่ยนตลับลูกปืนตามมาตรฐาน","parts":[{"name":"Bearing 6308 ZZ","qty":2,"unit":"PCS","price":1200,"total":2400}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"OK","afterStatus":"OK"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK"}]}],"assignedTech":"ช่างวิชัย มือทอง","approvedBySupervisor":"หัวหน้าวิศวกร"},{"id":"SKM-69-002","company":"บริษัท ไทยเคมีคอล เอ็นจิเนียริ่ง จำกัด","taxId":"0105558098765","docNo":"DOC-2026-014","contact":"คุณนภา ฝ่ายวิศวกรรม (089-456-7890)","siteContact":"คุณกิตติ วิศวกรประจำโรงงาน (089-456-7890)","location":"นิคมอุตสาหกรรมอมตะซิตี้ ชลบุรี เฟส 4","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"PM (Preventive Maintenance)","urgency":"ด่วน (High)","desiredDate":"2026-03-18","confirmedDate":"2026-03-18 (ยืนยันโดย Service Support)","status":"REPAIRING","isLocked":false,"rejectReason":"","createdAt":"2026-03-04 14:15","equipmentList":[{"type":"END SUCTION PUMP","brand":"GRUNDFOS","model":"NK 65-200/219","tag":"ESP-04","symptom":"เสียงดังผิดปกติที่ชุดลูกปืนและมีน้ำรั่วซึมที่ซีล","detail":"เกิดเสียงดังขณะเดินเครื่องที่ 2900 RPM","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"Mechanical Seal สึกหรอตามอายุการใช้งาน และลูกปืนขาดจาระบี","cause":"Normal Wear & Seal Degradation","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"เปลี่ยนชุด Mechanical Seal และตั้ง Alignment Coupling ใหม่ด้วยเลเซอร์","parts":[{"name":"Mechanical Seal Cartridge 45mm","qty":1,"unit":"SET","price":6500,"total":6500},{"name":"Flexible Coupling Rubber Element","qty":1,"unit":"PCS","price":1850,"total":1850}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"NG","afterStatus":"OK"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK"}]}],"assignedTech":"ช่างสมชาย ช่างกล","approvedBySupervisor":""}];
 
         let state = {
             currentView: 'home',
@@ -157,20 +160,185 @@
         function updateGsheetBadge() {
             const badge = document.getElementById('gsheet-status-badge');
             if (!badge) return;
-            badge.textContent = gasWebAppUrl ? 'ซิงค์ Google Sheet แล้ว' : 'เชื่อม Google Sheet / AppSheet';
+            if (gasWebAppUrl) {
+                badge.textContent = 'ซิงค์ Google Sheet + แจ้งเตือน LINE (@389fyhbl) แล้ว';
+            } else {
+                badge.textContent = 'ตั้งค่า Google Sheet & แจ้งเตือน LINE';
+            }
         }
 
-        async function syncToGoogleSheet() {
+        function formatTicketLineMessage(t, eventHeading) {
+            const portalUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
+                ? window.location.href
+                : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            const eqSummary = (t.equipmentList || []).map(eq => eq.type + ' (' + eq.brand + ' ' + (eq.model || '-') + ') อาการ: ' + eq.symptom).join(', ');
+            let totalPartsCost = 0;
+            let partsList = [];
+            (t.equipmentList || []).forEach(eq => {
+                (eq.parts || []).forEach(p => {
+                    totalPartsCost += (p.total || 0);
+                    partsList.push(p.name + ' x' + p.qty + ' (' + p.total.toLocaleString() + '฿)');
+                });
+            });
+            let lines = [
+                eventHeading || '🔔 [อัปเดตงานบริการ - สหคิมมอเตอร์]',
+                '━━━━━━━━━━━━━━',
+                '📋 เลขที่ใบงาน: ' + t.id,
+                '🏢 บริษัท: ' + t.company,
+                '📌 สถานะ: ' + t.status,
+                '🚨 ความเร่งด่วน: ' + (t.urgency || '-'),
+                '🔧 อุปกรณ์: ' + (eqSummary || '-'),
+                '📍 สถานที่: ' + (t.location || '-'),
+                '📞 ผู้ติดต่อ: ' + (t.siteContact || t.contact || '-')
+            ];
+            if (t.assignedTech) lines.push('👷 ช่างผู้รับผิดชอบ: ' + t.assignedTech);
+            if (t.confirmedDate || t.desiredDate) lines.push('📅 วันนัดหมาย: ' + (t.confirmedDate || t.desiredDate));
+            if (partsList.length > 0) {
+                lines.push('⚙️ อะไหล่ที่ขออนุมัติ: ' + partsList.join(', ') + ' [รวม ' + totalPartsCost.toLocaleString() + ' THB]');
+            }
+            if (t.rejectReason && t.status === 'REJECTED') {
+                lines.push('❌ เหตุผลส่งกลับแก้ไข: ' + t.rejectReason);
+            }
+            lines.push('━━━━━━━━━━━━━━');
+            lines.push('🔗 เปิดระบบ/อนุมัติงาน: ' + portalUrl);
+            return lines.join('\n');
+        }
+
+        function getTodayDateStr() {
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            return yyyy + '-' + mm + '-' + dd;
+        }
+
+        function extractTicketDueDate(t) {
+            const raw = (t.confirmedDate || t.desiredDate || '').trim();
+            const match = raw.match(/\d{4}-\d{2}-\d{2}/);
+            return match ? match[0] : raw;
+        }
+
+        function isTicketOverdue(t) {
+            if (!t || t.status === 'CLOSE') return false;
+            const dueStr = extractTicketDueDate(t);
+            if (!dueStr || !/^\d{4}-\d{2}-\d{2}$/.test(dueStr)) return false;
+            return dueStr < getTodayDateStr();
+        }
+
+        function getOverdueDays(t) {
+            const dueStr = extractTicketDueDate(t);
+            const todayStr = getTodayDateStr();
+            if (!dueStr || dueStr >= todayStr) return 0;
+            const diffMs = new Date(todayStr).getTime() - new Date(dueStr).getTime();
+            return Math.max(1, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+        }
+
+        function formatOverdueSummaryLineMessage(overdueList) {
+            const portalUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
+                ? window.location.href
+                : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            const todayStr = getTodayDateStr();
+            let lines = [
+                '🚨 [แจ้งเตือนงานค้างเกินกำหนดนัดหมาย (OVERDUE) - สหคิมมอเตอร์]',
+                '📅 ข้อมูล ณ วันที่: ' + todayStr,
+                '⚠️ พบงานค้างเกินกำหนดนัดหมาย จำนวน ' + overdueList.length + ' ใบงาน:',
+                '━━━━━━━━━━━━━━'
+            ];
+            overdueList.forEach((t, idx) => {
+                const dueStr = extractTicketDueDate(t);
+                const daysLate = getOverdueDays(t);
+                const eqStr = (t.equipmentList || []).map(eq => eq.type + ' (' + eq.brand + ')').join(', ');
+                lines.push((idx + 1) + ') 📋 ' + t.id + ' | ' + t.company);
+                lines.push('   📌 สถานะ: ' + t.status);
+                lines.push('   🗓️ วันนัดหมาย: ' + dueStr + ' (เกินกำหนด ' + daysLate + ' วัน)');
+                lines.push('   👷 ช่างผู้รับผิดชอบ: ' + (t.assignedTech || 'ยังไม่ระบุช่าง'));
+                lines.push('   🔧 อุปกรณ์: ' + (eqStr || '-'));
+                lines.push('   📍 สถานที่: ' + (t.location || '-'));
+                lines.push('━━━━━━━━━━━━━━');
+            });
+            lines.push('🔗 กดเพื่อตรวจสอบและเร่งรัดงาน: ' + portalUrl);
+            return lines.join('\n');
+        }
+
+        function formatAllTicketsSummaryLineMessage(allList) {
+            const portalUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
+                ? window.location.href
+                : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            const todayStr = getTodayDateStr();
+            const overdueCount = allList.filter(t => isTicketOverdue(t)).length;
+            const closedCount = allList.filter(t => t.status === 'CLOSE').length;
+            const activeCount = allList.length - closedCount;
+            let lines = [
+                '📊 [อัปเดตสรุปข้อมูลใบงานทั้งหมด - บริษัท สหคิมมอเตอร์ จำกัด]',
+                '📅 ข้อมูล ณ วันที่: ' + todayStr,
+                '📋 งานทั้งหมด: ' + allList.length + ' ใบงาน (กำลังดำเนินการ ' + activeCount + ' | ปิดงานแล้ว ' + closedCount + ' | เกินกำหนด ' + overdueCount + ')',
+                '━━━━━━━━━━━━━━'
+            ];
+            allList.forEach((t, idx) => {
+                const dueStr = extractTicketDueDate(t);
+                const overdue = isTicketOverdue(t);
+                const eqStr = (t.equipmentList || []).map(eq => eq.type + ' (' + eq.brand + ' ' + (eq.model || '-') + ')').join(', ');
+                lines.push((idx + 1) + ') 📋 ' + t.id + ' — ' + t.company);
+                lines.push('   📌 สถานะ: ' + t.status + (overdue ? ' [⚠️ เกินกำหนดนัด]' : ''));
+                lines.push('   🔧 อุปกรณ์: ' + (eqStr || '-'));
+                lines.push('   👷 ช่าง: ' + (t.assignedTech || 'ยังไม่ระบุ') + ' | 🗓️ นัด: ' + (dueStr || '-'));
+                lines.push('━━━━━━━━━━━━━━');
+            });
+            lines.push('🔗 เปิดระบบจัดการใบงาน: ' + portalUrl);
+            return lines.join('\n');
+        }
+
+        async function syncAllTicketsUpdateToLine() {
+            const msg = formatAllTicketsSummaryLineMessage(state.tickets);
+            if (gasWebAppUrl) {
+                await syncToGoogleSheet(msg);
+                alert('✅ อัปเดตข้อมูลใบงานทั้งหมด (' + state.tickets.length + ' ใบงาน) ไปยัง Google Sheet และส่งสรุปเข้า LINE (@389fyhbl) เรียบร้อยแล้ว!');
+            } else {
+                const lineShareUrl = 'https://line.me/R/share?text=' + encodeURIComponent(msg);
+                window.open(lineShareUrl, '_blank', 'noopener,noreferrer');
+            }
+        }
+
+        async function notifyOverdueTicketsToLine() {
+            const overdueList = state.tickets.filter(t => isTicketOverdue(t));
+            if (overdueList.length === 0) {
+                alert('✅ ไม่มีงานค้างที่เกินกำหนดนัดหมายในขณะนี้ (ทุกใบงานอยู่ในกำหนดเวลา)');
+                return;
+            }
+            const msg = formatOverdueSummaryLineMessage(overdueList);
+            if (gasWebAppUrl) {
+                await syncToGoogleSheet(msg);
+                alert('🚨 ส่งแจ้งเตือนงานค้างเกินกำหนดนัดหมาย (' + overdueList.length + ' ใบงาน) เข้า LINE อัตโนมัติเรียบร้อยแล้ว!');
+            } else {
+                const lineShareUrl = 'https://line.me/R/share?text=' + encodeURIComponent(msg);
+                window.open(lineShareUrl, '_blank', 'noopener,noreferrer');
+            }
+        }
+
+        function shareTicketToLine(ticketId, customHeading) {
+            const t = state.tickets.find(x => x.id === ticketId);
+            if (!t) return;
+            const msg = formatTicketLineMessage(t, customHeading || '📢 [แจ้งเตือนใบงาน - บริษัท สหคิมมอเตอร์ จำกัด]');
+            const lineShareUrl = 'https://line.me/R/share?text=' + encodeURIComponent(msg);
+            window.open(lineShareUrl, '_blank', 'noopener,noreferrer');
+        }
+
+        async function syncToGoogleSheet(lineNotifyText) {
             if (!gasWebAppUrl) return;
             try {
                 await fetch(gasWebAppUrl, {
                     method: 'POST',
                     mode: 'no-cors',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ tickets: state.tickets })
+                    body: JSON.stringify({
+                        tickets: state.tickets,
+                        lineNotifyText: lineNotifyText || '',
+                        lineChannelToken: lineChannelToken || '',
+                        lineTargetId: lineTargetId || ''
+                    })
                 });
             } catch (e) {
-                console.warn('Google Sheet Sync warning:', e);
+                console.warn('Google Sheet / LINE Sync warning:', e);
             }
         }
 
@@ -193,13 +361,15 @@
             }
         }
 
-        function persistState() {
+        function persistState(lineNotifyText) {
             localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
             localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians));
+            localStorage.setItem('sahakim_sup_pass', savedSupPassword);
+            localStorage.setItem('sahakim_service_pin', savedServicePin);
             localStorage.setItem('sahakim_knowledge_templates', JSON.stringify(knowledgeTemplates));
             localStorage.setItem('sahakim_custom_equip_types', JSON.stringify(customEquipList));
             localStorage.setItem('sahakim_custom_brands', JSON.stringify(customBrandList));
-            syncToGoogleSheet();
+            syncToGoogleSheet(lineNotifyText);
         }
 
         function openGoogleSheetModal() {
@@ -207,28 +377,51 @@
             modalBg.id = 'gsheet-modal';
             modalBg.className = 'fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 overflow-y-auto';
             modalBg.innerHTML = `
-                <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto text-xs sm:text-sm">
+                <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto text-xs sm:text-sm">
                     <div class="flex justify-between items-center border-b pb-2">
-                        <h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-table text-emerald-600 mr-2"></i> ตั้งค่าเชื่อมต่อ Google Sheets & AppSheet (ฟรี 100%)</h3>
+                        <h3 class="font-bold text-base text-slate-900"><i class="fa-brands fa-line text-emerald-600 mr-1.5 text-lg"></i> ตั้งค่าฐานข้อมูล Google Sheets & แจ้งเตือนเข้า LINE อัตโนมัติ</h3>
                         <button onclick="document.getElementById('gsheet-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button>
                     </div>
+
                     <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-xl space-y-1 text-xs text-emerald-900">
-                        <p class="font-bold">ข้อดีของการเชื่อม Google Sheets ผ่าน Apps Script:</p>
-                        <p>1. ข้อมูลใบงานซิงค์ออนไลน์ทุกเครื่องทันที (มือถือลูกค้า, ช่าง, แอดมิน เห็นข้อมูลตรงกัน)</p>
-                        <p>2. เปิดดูตารางข้อมูลสดใน Google Sheets หรือนำไปสร้างแอปใน <b>Google AppSheet</b> ควบคู่กันได้ทันที</p>
+                        <p class="font-bold">การทำงานอัตโนมัติ (เมื่อมีงานใหม่ หรือมีงานรออนุมัติอะไหล่/รายงาน):</p>
+                        <p>1. <b>แจ้งเตือนเข้า LINE อัตโนมัติ (LINE Official Account)</b>: เมื่อลูกค้ากดแจ้งซ่อมใหม่ หรือช่างกดขออนุมัติอะไหล่/รายงาน ระบบจะยิงข้อความแจ้งเตือนเข้ากลุ่ม LINE ของบริษัททันที</p>
+                        <p>2. <b>ปุ่มส่งเข้า LINE ด่วน 1 คลิก</b>: ในทุกใบงานมีปุ่มสีเขียว <b>"ส่งแจ้งเตือน LINE"</b> ให้กดแชร์เข้าห้องแชท LINE ได้ทันทีโดยไม่ต้องใช้ Token</p>
                     </div>
+
                     <div class="space-y-2">
-                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 1: คัดลอกโค้ดด้านล่างไปวางใน Google Sheet (เมนู ส่วนขยาย > Apps Script)</label>
-                        <textarea id="gas-code-box" readonly rows="6" class="w-full border rounded-xl p-2 font-mono text-[11px] bg-slate-900 text-emerald-300"></textarea>
-                        <button type="button" onclick="navigator.clipboard.writeText(GAS_CODE_TEMPLATE); alert('คัดลอกโค้ด Google Apps Script เรียบร้อย!');" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-copy mr-1"></i> คัดลอกโค้ด Apps Script</button>
+                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 1: คัดลอกโค้ด Apps Script เวอร์ชันรองรับ LINE ด้านล่างไปวางใน Google Sheet (ส่วนขยาย > Apps Script)</label>
+                        <textarea id="gas-code-box" readonly rows="5" class="w-full border rounded-xl p-2 font-mono text-[11px] bg-slate-900 text-emerald-300"></textarea>
+                        <button type="button" onclick="navigator.clipboard.writeText(GAS_CODE_TEMPLATE); alert('คัดลอกโค้ด Google Apps Script (รุ่นรองรับ LINE) เรียบร้อย!');" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-copy mr-1"></i> คัดลอกโค้ด Apps Script</button>
                     </div>
+
                     <div class="space-y-2 border-t pt-3">
-                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 2: วางลิงก์ Web App URL ที่ได้จากการกด Deploy (ลงท้ายด้วย /exec)</label>
-                        <input type="url" id="gas-url-input" value="${gasWebAppUrl}" placeholder="https://script.google.com/macros/s/......./exec" class="w-full border rounded-xl p-2">
+                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 2: วางลิงก์ Google Apps Script Web App URL (ลงท้ายด้วย /exec)</label>
+                        <input type="url" id="gas-url-input" value="${gasWebAppUrl}" placeholder="https://script.google.com/macros/s/......./exec" class="w-full border rounded-xl p-2 font-mono text-xs">
                     </div>
+
+                    <div class="space-y-3 border-t pt-3 bg-slate-50 p-3.5 rounded-xl border">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <p class="font-bold text-slate-900 flex items-center gap-1.5"><i class="fa-brands fa-line text-emerald-600 text-base"></i> ขั้นตอนที่ 3: ตั้งค่าแจ้งเตือนเข้า LINE (@389fyhbl - Sahakim.service bot)</p>
+                            <span class="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full">เชื่อมบอท @389fyhbl อัตโนมัติแล้ว</span>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">LINE Channel Access Token (เว้นว่างได้เลย โค้ด Apps Script เชื่อมต่อให้อัตโนมัติแล้ว):</label>
+                            <input type="text" id="line-token-input" value="${lineChannelToken}" placeholder="เว้นว่างได้เลย (ระบบเชื่อมต่อ @389fyhbl อัตโนมัติ)" class="w-full border rounded-xl p-2 font-mono text-xs bg-white">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">LINE Group ID หรือ User ID (เว้นว่างได้ ระบบจะส่งเข้าแชท Sahakim.service bot อัตโนมัติ):</label>
+                            <input type="text" id="line-target-input" value="${lineTargetId}" placeholder="เว้นว่างเพื่อส่งเข้า Sahakim.service bot อัตโนมัติ หรือใส่ Group ID (C...)" class="w-full border rounded-xl p-2 font-mono text-xs bg-white">
+                        </div>
+                        <div class="flex flex-wrap gap-2 pt-1">
+                            <button type="button" onclick="testLineNotification()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-brands fa-line mr-1"></i> ทดสอบยิงแจ้งเตือนเข้า LINE</button>
+                            <button type="button" onclick="syncAllTicketsUpdateToLine()" class="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> อัปเดตข้อมูลใบงานทั้งหมดเข้า LINE & Sheet</button>
+                        </div>
+                    </div>
+
                     <div class="flex flex-wrap justify-end gap-2 pt-2 border-t">
                         <button type="button" onclick="document.getElementById('gsheet-modal').remove()" class="bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold cursor-pointer">ปิด</button>
-                        <button type="button" onclick="saveGasUrlAndSync()" class="bg-emerald-600 text-white px-5 py-2 rounded-xl font-bold shadow cursor-pointer">บันทึก URL และซิงค์ข้อมูลทันที</button>
+                        <button type="button" onclick="saveGasUrlAndSync()" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-xl font-bold shadow cursor-pointer">บันทึกการตั้งค่าทั้งหมด</button>
                     </div>
                 </div>
             `;
@@ -236,16 +429,43 @@
             document.getElementById('gas-code-box').value = GAS_CODE_TEMPLATE;
         }
 
+        async function testLineNotification() {
+            const urlVal = document.getElementById('gas-url-input').value.trim();
+            const tokenVal = document.getElementById('line-token-input').value.trim();
+            const targetVal = document.getElementById('line-target-input').value.trim();
+            gasWebAppUrl = urlVal;
+            lineChannelToken = tokenVal;
+            lineTargetId = targetVal;
+            localStorage.setItem('sahakim_gas_url', gasWebAppUrl);
+            localStorage.setItem('sahakim_line_token', lineChannelToken);
+            localStorage.setItem('sahakim_line_target', lineTargetId);
+
+            const testMsg = '✅ [ทดสอบระบบแจ้งเตือน LINE - บริษัท สหคิมมอเตอร์ จำกัด]\nเชื่อมต่อระบบแจ้งเตือนงานซ่อมใหม่และงานรออนุมัติสำเร็จ!\n🔗 https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            if (gasWebAppUrl) {
+                await syncToGoogleSheet(testMsg);
+                alert('ส่งข้อความทดสอบไปยัง LINE (@389fyhbl) ผ่าน Google Apps Script แล้ว! กรุณาตรวจสอบในแชท LINE ของคุณ');
+            } else {
+                const lineShareUrl = 'https://line.me/R/share?text=' + encodeURIComponent(testMsg);
+                window.open(lineShareUrl, '_blank', 'noopener,noreferrer');
+            }
+        }
+
         async function saveGasUrlAndSync() {
             const val = document.getElementById('gas-url-input').value.trim();
+            const tokenVal = document.getElementById('line-token-input').value.trim();
+            const targetVal = document.getElementById('line-target-input').value.trim();
             gasWebAppUrl = val;
+            lineChannelToken = tokenVal;
+            lineTargetId = targetVal;
             localStorage.setItem('sahakim_gas_url', gasWebAppUrl);
+            localStorage.setItem('sahakim_line_token', lineChannelToken);
+            localStorage.setItem('sahakim_line_target', lineTargetId);
             updateGsheetBadge();
             if (gasWebAppUrl) {
                 await syncToGoogleSheet();
                 await loadFromGoogleSheet(true);
             } else {
-                alert('ยกเลิกการเชื่อมต่อ Google Sheet แล้ว (เก็บข้อมูลในเครื่องแทน)');
+                alert('บันทึกการตั้งค่าเรียบร้อยแล้ว');
             }
             const m = document.getElementById('gsheet-modal');
             if (m) m.remove();
@@ -343,6 +563,7 @@
                 alert('⚠️ ใบงานนี้ถูกล็อกแล้ว! ต้องให้ Supervisor ปลดล็อกเท่านั้น');
                 return;
             }
+            let lineMsg = '';
             if (newStatus === 'ASSIGNED') {
                 let dateInput = prompt("ระบุวันที่นัดหมายเข้าปฏิบัติงาน (YYYY-MM-DD):", t.desiredDate);
                 if (!dateInput) return;
@@ -352,10 +573,11 @@
                 t.confirmedDate = dateInput + " (ยืนยันโดย Service Support)";
                 t.assignedTech = techChoice;
                 t.status = "ASSIGNED";
+                lineMsg = formatTicketLineMessage(t, '👷 [มอบหมายงานช่างแล้ว - สหคิมมอเตอร์]');
             } else {
                 t.status = newStatus;
             }
-            persistState();
+            persistState(lineMsg);
             render();
         }
 
@@ -371,13 +593,16 @@
             openInternalLogin: () => { state.currentView = 'internal_login'; render(); },
             loginInternalSubmit: (event) => {
                 event.preventDefault();
-                const pin = document.getElementById('emp-pin').value;
+                const pin = document.getElementById('emp-pin').value.trim();
                 const role = document.getElementById('emp-role').value;
                 if (role === 'SUPERVISOR' && pin !== savedSupPassword) {
-                    alert('รหัสผ่าน Supervisor ไม่ถูกต้อง! (ค่าเริ่มต้น: admin123)');
+                    alert('รหัสผ่าน Supervisor ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
                     return;
-                } else if (role !== 'SUPERVISOR' && !state.technicians.some(tc => tc.pin === pin) && pin !== '1234') {
-                    alert('รหัสพนักงาน (PIN) ไม่ถูกต้อง!');
+                } else if (role === 'SERVICE TEAM' && pin !== savedServicePin && pin !== savedSupPassword && !state.technicians.some(tc => tc.pin === pin)) {
+                    alert('รหัสผ่านเจ้าหน้าที่ Service ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+                    return;
+                } else if (role === 'TECHNICIAN' && !state.technicians.some(tc => tc.pin === pin) && pin !== savedSupPassword) {
+                    alert('รหัส PIN ช่างเทคนิคไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
                     return;
                 }
                 state.userRole = role;
@@ -667,9 +892,10 @@
                 approvedBySupervisor: ""
             };
             state.tickets.unshift(newTicket);
-            persistState();
+            const lineMsg = formatTicketLineMessage(newTicket, '🔔 [มีใบแจ้งซ่อมใหม่! (NEW) - สหคิมมอเตอร์]');
+            persistState(lineMsg);
             tempEquipmentList = [];
-            alert('สร้างใบแจ้งซ่อมสำเร็จ!');
+            alert('สร้างใบแจ้งซ่อมสำเร็จ! ระบบบันทึกข้อมูลและส่งแจ้งเตือนไปยังทีมบริการแล้ว');
             switchCustTab('list');
             render();
         }
@@ -703,8 +929,8 @@
                             </select>
                         </div>
                         <div>
-                            <label class="block font-bold text-slate-700 mb-1">รหัสพนักงาน / PIN หรือรหัส Supervisor *</label>
-                            <input type="password" id="emp-pin" placeholder="PIN (เช่น 1111 หรือ admin123)" required class="w-full border rounded-xl p-2 text-center tracking-widest font-bold">
+                            <label class="block font-bold text-slate-700 mb-1">รหัสพนักงาน (PIN) หรือรหัสผ่าน Supervisor *</label>
+                            <input type="password" id="emp-pin" placeholder="กรอกรหัสผ่าน / PIN เจ้าหน้าที่" required class="w-full border rounded-xl p-2 text-center tracking-widest font-bold">
                         </div>
                         <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl shadow transition cursor-pointer">เข้าสู่ระบบ</button>
                     </form>
@@ -725,8 +951,9 @@
                     if (eq.parts) eq.parts.forEach(p => totalMoney += (p.total || 0));
                 });
             });
-            let onTimeCount = Math.max(1, Math.floor(totalTickets * 0.85));
-            let overdueCount = Math.max(0, totalTickets - onTimeCount);
+            let overdueTickets = state.tickets.filter(t => isTicketOverdue(t));
+            let overdueCount = overdueTickets.length;
+            let onTimeCount = Math.max(0, totalTickets - overdueCount);
             let topEquip = Object.keys(equipCountMap).sort((a,b) => equipCountMap[b] - equipCountMap[a])[0] || "BOOSTER PUMP";
 
             return `
@@ -738,6 +965,8 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-2 text-xs">
                             ${state.userRole === 'SUPERVISOR' ? `
+                                <button onclick="syncAllTicketsUpdateToLine()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> อัปเดตข้อมูลทั้งหมดเข้า LINE</button>
+                                <button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้งเตือนงานค้าง (${overdueCount})</button>
                                 <button onclick="openGoogleSheetModal()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-database text-emerald-400 mr-1"></i> <span id="gsheet-status-badge">ตั้งค่าฐานข้อมูล Google Sheet (Admin)</span></button>
                                 <button onclick="openTechnicianManager()" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-users-gear mr-1"></i> จัดการพนักงาน (เพิ่ม/ลบ/รหัส)</button>
                             ` : ''}
@@ -760,32 +989,41 @@
                             <h3 class="text-sm font-bold text-orange-600 mt-1">${topEquip}</h3>
                         </div>
                         <div class="bg-white p-3 rounded-xl shadow border">
-                            <p class="text-slate-500 font-bold">เวลาการทำงาน (SLA)</p>
-                            <h3 class="text-sm font-bold text-emerald-600 mt-1">ตรงเวลา: ${onTimeCount} | เกินเวลา: ${overdueCount}</h3>
+                            <p class="text-slate-500 font-bold">เวลาการทำงาน (SLA วันนัดปัจจุบัน)</p>
+                            <h3 class="text-sm font-bold text-emerald-600 mt-1">ตรงเวลา: ${onTimeCount} | <span class="text-rose-600">เกินกำหนด: ${overdueCount}</span></h3>
                         </div>
                     </div>
 
                     <div class="bg-white p-4 sm:p-6 rounded-2xl shadow border space-y-3">
-                        <h3 class="text-base font-bold text-slate-900 border-b pb-2"><i class="fa-solid fa-list-check text-orange-500 mr-2"></i> จัดการรายการคำขอและสถานะ (Workflow)</h3>
+                        <div class="flex flex-wrap justify-between items-center gap-2 border-b pb-2">
+                            <h3 class="text-base font-bold text-slate-900"><i class="fa-solid fa-list-check text-orange-500 mr-2"></i> จัดการรายการคำขอและสถานะ (Workflow)</h3>
+                            ${state.userRole === 'SUPERVISOR' && overdueCount > 0 ? `<button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-triangle-exclamation mr-1"></i> ส่งแจ้งเตือนงานค้าง (${overdueCount} งาน) เข้ากลุ่ม LINE</button>` : ''}
+                        </div>
                         <div class="space-y-3">
-                            ${state.tickets.map(t => `
-                                <div class="bg-slate-50 p-3 sm:p-4 rounded-xl border flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                            ${state.tickets.map(t => {
+                                const overdue = isTicketOverdue(t);
+                                const dueStr = extractTicketDueDate(t);
+                                const daysLate = overdue ? getOverdueDays(t) : 0;
+                                return `
+                                <div class="bg-slate-50 p-3 sm:p-4 rounded-xl border ${overdue ? 'border-rose-300 bg-rose-50/30' : ''} flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
                                     <div class="space-y-1 text-xs">
                                         <div class="flex items-center space-x-2 flex-wrap gap-1">
                                             <span class="font-bold text-orange-600">${t.id}</span>
                                             ${getActionableStatusButton(t)}
                                             <span class="text-slate-700 font-bold">${t.company}</span>
+                                            ${overdue ? `<span class="bg-rose-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">⚠️ เกินกำหนดนัด ${daysLate} วัน (นัด ${dueStr})</span>` : ''}
                                             ${t.isLocked ? '<span class="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock mr-1"></i> ล็อกแล้ว</span>' : '<span class="bg-emerald-100 text-emerald-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock-open mr-1"></i> เปิดแก้ไข</span>'}
                                         </div>
-                                        <p class="text-slate-500">สถานที่: <span class="text-slate-800 font-bold">${t.location || '-'}</span> | ผู้ติดต่อหน้างาน: <b class="text-indigo-600">${t.siteContact || t.contact}</b> | ช่าง: <span class="font-bold">${t.assignedTech || 'ยังไม่ระบุ'}</span></p>
+                                        <p class="text-slate-500">วันนัดหมาย: <span class="font-bold ${overdue ? 'text-rose-600' : 'text-slate-800'}">${t.confirmedDate || t.desiredDate || '-'}</span> | สถานที่: <span class="text-slate-800 font-bold">${t.location || '-'}</span> | ช่าง: <span class="font-bold">${t.assignedTech || 'ยังไม่ระบุ'}</span></p>
                                     </div>
                                     <div class="flex flex-wrap items-center gap-2">
                                         ${t.isLocked && state.userRole === 'SUPERVISOR' ? `<button onclick="unlockTicket('${t.id}')" class="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-key mr-1"></i> ปลดล็อก</button>` : ''}
+                                        <button onclick="shareTicketToLine('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้ง LINE</button>
                                         <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
                                         <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
                                     </div>
                                 </div>
-                            `).join('')}
+                            `;}).join('')}
                         </div>
                     </div>
                 </div>
@@ -794,9 +1032,17 @@
 
         function openTechnicianManager() {
             let techRows = state.technicians.map((tc, idx) => `
-                <div class="flex justify-between items-center bg-slate-50 p-2 rounded border text-xs">
-                    <div><b>${tc.name}</b> (${tc.id}) - PIN: <span class="text-indigo-600 font-bold">${tc.pin || '1234'}</span><br><span class="text-slate-500 text-[10px]">${tc.specialization}</span></div>
-                    <button onclick="removeTechnician(${idx})" class="bg-red-500 text-white px-2 py-1 rounded font-bold cursor-pointer">ลบ</button>
+                <div class="flex flex-wrap justify-between items-center bg-slate-50 p-2.5 rounded-xl border gap-2 text-xs">
+                    <div>
+                        <b>${tc.name}</b> <span class="text-slate-500">(${tc.id})</span><br>
+                        <span class="text-slate-500 text-[10px]">${tc.specialization}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-[11px] font-bold text-slate-600">PIN:</span>
+                        <input type="text" id="edit-tech-pin-${idx}" value="${tc.pin || '1234'}" class="border rounded-lg px-2 py-1 w-20 font-mono font-bold text-indigo-700 bg-white text-center">
+                        <button onclick="updateTechnicianPin(${idx})" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg font-bold cursor-pointer">บันทึก PIN</button>
+                        <button onclick="removeTechnician(${idx})" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded-lg font-bold cursor-pointer">ลบ</button>
+                    </div>
                 </div>
             `).join('');
 
@@ -804,27 +1050,74 @@
             modalBg.id = 'tech-modal';
             modalBg.className = 'fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 overflow-y-auto';
             modalBg.innerHTML = `
-                <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 space-y-3">
-                    <div class="flex justify-between items-center border-b pb-2"><h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-users-gear mr-2"></i> จัดการข้อมูลพนักงานและรหัส PIN</h3><button onclick="document.getElementById('tech-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button></div>
-                    <div class="space-y-2 max-h-60 overflow-y-auto">${techRows}</div>
-                    <div class="border-t pt-3 space-y-2 text-xs">
-                        <h4 class="font-bold text-slate-800">เพิ่มพนักงานใหม่</h4>
-                        <div class="grid grid-cols-2 gap-2">
-                            <input type="text" id="new-tech-name" placeholder="ชื่อ-นามสกุลช่าง" class="border rounded p-1.5">
-                            <input type="text" id="new-tech-spec" placeholder="ความเชี่ยวชาญ" class="border rounded p-1.5">
-                            <input type="password" id="new-tech-pin" placeholder="รหัสผ่าน PIN (เช่น 4 หลัก)" class="border rounded p-1.5">
+                <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+                    <div class="flex justify-between items-center border-b pb-2"><h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-users-gear mr-2 text-orange-500"></i> จัดการรหัสผ่าน Admin / เจ้าหน้าที่ / ช่างเทคนิค</h3><button onclick="document.getElementById('tech-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button></div>
+
+                    <div class="bg-slate-900 text-white p-3.5 rounded-xl space-y-3 text-xs">
+                        <h4 class="font-bold text-orange-400"><i class="fa-solid fa-key mr-1"></i> ตั้งค่ารหัสผ่านผู้ดูแลระบบ (Supervisor / Admin) และ Service Support</h4>
+                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                            <label class="font-bold">รหัส Supervisor (Admin):</label>
+                            <div class="flex gap-1.5">
+                                <input type="text" id="edit-sup-pass" value="${savedSupPassword}" class="border border-slate-600 rounded-lg px-2.5 py-1 bg-slate-800 text-white font-mono font-bold w-36 text-center">
+                                <button onclick="saveSupervisorPassword()" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded-lg font-bold cursor-pointer">บันทึกรหัส Admin</button>
+                            </div>
                         </div>
-                        <button onclick="addNewTechnician()" class="w-full bg-orange-500 text-white font-bold py-2 rounded shadow cursor-pointer">บันทึกเพิ่มพนักงาน</button>
+                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t border-slate-700 pt-2.5">
+                            <label class="font-bold">รหัส Service Team (รับงาน):</label>
+                            <div class="flex gap-1.5">
+                                <input type="text" id="edit-service-pin" value="${savedServicePin}" class="border border-slate-600 rounded-lg px-2.5 py-1 bg-slate-800 text-white font-mono font-bold w-36 text-center">
+                                <button onclick="saveServiceTeamPin()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg font-bold cursor-pointer">บันทึกรหัส Service</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <h4 class="font-bold text-xs text-slate-800">รายชื่อช่างเทคนิค (พิมพ์แก้รหัส PIN แล้วกดบันทึกได้ทันที)</h4>
+                        <div class="space-y-2 max-h-56 overflow-y-auto">${techRows}</div>
+                    </div>
+
+                    <div class="border-t pt-3 space-y-2 text-xs">
+                        <h4 class="font-bold text-slate-800">เพิ่มพนักงานช่างใหม่</h4>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <input type="text" id="new-tech-name" placeholder="ชื่อ-นามสกุลช่าง *" class="border rounded-lg p-1.5">
+                            <input type="text" id="new-tech-spec" placeholder="ความเชี่ยวชาญ" class="border rounded-lg p-1.5">
+                            <input type="text" id="new-tech-pin" placeholder="ตั้งรหัส PIN (เช่น 4 หลัก)" class="border rounded-lg p-1.5 font-mono">
+                        </div>
+                        <button onclick="addNewTechnician()" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 rounded-xl shadow cursor-pointer">บันทึกเพิ่มพนักงาน</button>
                     </div>
                 </div>
             `;
             document.body.appendChild(modalBg);
         }
 
+        function saveSupervisorPassword() {
+            let newPass = document.getElementById('edit-sup-pass').value.trim();
+            if (!newPass) { alert('กรุณากรอกรหัสผ่าน Supervisor ใหม่'); return; }
+            savedSupPassword = newPass;
+            persistState();
+            alert('เปลี่ยนรหัสผ่าน Supervisor (Admin) เรียบร้อยแล้ว!');
+        }
+
+        function saveServiceTeamPin() {
+            let newPin = document.getElementById('edit-service-pin').value.trim();
+            if (!newPin) { alert('กรุณากรอกรหัสผ่าน Service Team ใหม่'); return; }
+            savedServicePin = newPin;
+            persistState();
+            alert('เปลี่ยนรหัสผ่าน Service Team เรียบร้อยแล้ว!');
+        }
+
+        function updateTechnicianPin(idx) {
+            let newPin = document.getElementById('edit-tech-pin-' + idx).value.trim();
+            if (!newPin) { alert('กรุณากรอกรหัส PIN'); return; }
+            state.technicians[idx].pin = newPin;
+            persistState();
+            alert('อัปเดตรหัส PIN ของ ' + state.technicians[idx].name + ' เรียบร้อยแล้ว!');
+        }
+
         function addNewTechnician() {
-            let name = document.getElementById('new-tech-name').value;
-            let spec = document.getElementById('new-tech-spec').value || "GENERAL TECH";
-            let pin = document.getElementById('new-tech-pin').value || "1234";
+            let name = document.getElementById('new-tech-name').value.trim();
+            let spec = document.getElementById('new-tech-spec').value.trim() || "GENERAL TECH";
+            let pin = document.getElementById('new-tech-pin').value.trim() || "1234";
             if (!name) { alert('กรุณากรอกชื่อช่าง'); return; }
             state.technicians.push({ id: `TECH-0${state.technicians.length + 1}`, name, specialization: spec, status: "Available", pin });
             persistState();
@@ -851,7 +1144,14 @@
 
         function supervisorApproveParts(id) {
             const t = state.tickets.find(x => x.id === id);
-            if (t) { t.equipmentList.forEach(eq => eq.partsApproved = true); t.status = "REPAIRING"; persistState(); alert('อนุมัติอะไหล่สำเร็จ!'); render(); }
+            if (t) {
+                t.equipmentList.forEach(eq => eq.partsApproved = true);
+                t.status = "REPAIRING";
+                const lineMsg = formatTicketLineMessage(t, '✅ [Supervisor อนุมัติอะไหล่แล้ว - ดำเนินการซ่อมได้]');
+                persistState(lineMsg);
+                alert('อนุมัติอะไหล่สำเร็จ!');
+                render();
+            }
         }
 
         function supervisorApproveReport(id) {
@@ -860,7 +1160,8 @@
                 t.approvedBySupervisor = prompt("กรอกชื่อ Supervisor ลงนามอนุมัติ:", "หัวหน้าวิศวกร") || "หัวหน้าวิศวกร";
                 t.status = "CUSTOMER_ACCEPTANCE";
                 t.isLocked = true;
-                persistState();
+                const lineMsg = formatTicketLineMessage(t, '✅ [Supervisor อนุมัติใบรายงานแล้ว - รอลูกค้าตรวจรับงาน]');
+                persistState(lineMsg);
                 alert('อนุมัติรายงานและล็อกข้อมูลสำเร็จ!');
                 render();
             }
@@ -870,7 +1171,14 @@
             let reason = prompt("ระบุเหตุผลที่ไม่อนุมัติ:");
             if (!reason) return;
             const t = state.tickets.find(x => x.id === id);
-            if (t) { t.rejectReason = reason; t.status = "REJECTED"; persistState(); alert('ส่งกลับแก้ไขแล้ว'); render(); }
+            if (t) {
+                t.rejectReason = reason;
+                t.status = "REJECTED";
+                const lineMsg = formatTicketLineMessage(t, '❌ [Supervisor ส่งกลับให้แก้ไขข้อมูลใบงาน]');
+                persistState(lineMsg);
+                alert('ส่งกลับแก้ไขแล้ว');
+                render();
+            }
         }
 
         function runAiEngineeringAnalysis(ticketId, eqIdx) {
@@ -1069,7 +1377,8 @@
             if (!t.equipmentList[eqIdx].parts) t.equipmentList[eqIdx].parts = [];
             t.equipmentList[eqIdx].parts.push({ name, qty, unit: 'PCS', price, total: qty * price });
             t.status = "PENDING_PARTS_APPROVAL";
-            persistState();
+            const lineMsg = formatTicketLineMessage(t, '⏳ [ขออนุมัติเบิกอะไหล่ด่วน! - รอ Supervisor อนุมัติ]');
+            persistState(lineMsg);
             document.getElementById('action-modal').remove();
             openInternalActionModal(ticketId);
         }
@@ -1078,8 +1387,9 @@
             saveModalValuesWithoutClosing(ticketId);
             const t = state.tickets.find(x => x.id === ticketId);
             t.status = "PENDING_SUPERVISOR_APPROVAL";
-            persistState();
-            alert('ส่งรายงานให้ Supervisor อนุมัติเรียบร้อย!');
+            const lineMsg = formatTicketLineMessage(t, '✍️ [ช่างส่งรายงานซ่อมแล้ว! - รอ Supervisor อนุมัติ]');
+            persistState(lineMsg);
+            alert('ส่งรายงานให้ Supervisor อนุมัติ และแจ้งเตือนผ่าน LINE เรียบร้อย!');
             document.getElementById('action-modal').remove();
             render();
         }
