@@ -1388,6 +1388,263 @@
             if (dateInput) dateInput.value = dateStr;
         }
 
+        let currentSigTicketId = null;
+        let currentSigType = null;
+        let currentSigColor = '#0f172a';
+        let sigDrawn = false;
+        let sigCtx = null;
+        let sigCanvas = null;
+        let isDrawingSig = false;
+        let lastSigPos = null;
+
+        function setSigColor(c) {
+            currentSigColor = c;
+            if (sigCtx) sigCtx.strokeStyle = c;
+        }
+
+        function clearSigCanvas() {
+            if (!sigCanvas || !sigCtx) return;
+            sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+            sigDrawn = false;
+            const wm = document.getElementById('sig-watermark');
+            if (wm) wm.style.display = 'flex';
+        }
+
+        function closeSignatureModal() {
+            const el = document.getElementById('online-signature-modal');
+            if (el) el.remove();
+            currentSigTicketId = null;
+            currentSigType = null;
+        }
+
+        function openSignatureModal(ticketId, type) {
+            currentSigTicketId = ticketId;
+            currentSigType = type;
+            const t = state.tickets.find(x => x.id === ticketId);
+            if (!t) return;
+
+            const existingModal = document.getElementById('online-signature-modal');
+            if (existingModal) existingModal.remove();
+
+            const isTech = type === 'technician';
+            const title = isTech ? '✍️ ลายเซ็นช่างผู้ปฏิบัติงาน (Technician Signature)' : '✍️ ลายเซ็นลูกค้าผู้ตรวจรับงาน (Customer Acceptance)';
+            const signerName = isTech 
+                ? (t.assignedTech || 'ช่างเทคนิค') 
+                : (t.customerSignerName || t.siteContact || t.contact || '');
+            const currentSig = isTech ? t.technicianSignature : t.customerSignature;
+
+            const modal = document.createElement('div');
+            modal.id = 'online-signature-modal';
+            modal.className = 'fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto no-print';
+            modal.innerHTML = `
+                <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 text-xs sm:text-sm">
+                    <div class="flex justify-between items-start border-b pb-3">
+                        <div>
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded ${isTech ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'} uppercase">
+                                ${isTech ? 'TECHNICIAN E-SIGNATURE' : 'CUSTOMER SIGN-OFF'}
+                            </span>
+                            <h3 class="text-base sm:text-lg font-bold text-slate-900 mt-1">${title}</h3>
+                            <p class="text-xs text-slate-500">ใบงาน: <b class="text-orange-600">${t.id}</b> | บริษัท: <b>${t.company}</b></p>
+                        </div>
+                        <button onclick="closeSignatureModal()" class="text-2xl font-bold text-slate-400 hover:text-slate-600 cursor-pointer">&times;</button>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">
+                                ${isTech ? 'ชื่อ-นามสกุล ช่างผู้ปฏิบัติงาน *' : 'ชื่อ-นามสกุล ลูกค้าผู้ตรวจรับงาน *'}
+                            </label>
+                            <input type="text" id="signer-name-input" value="${signerName}" placeholder="ระบุชื่อผู้ลงนาม..." class="w-full border rounded-xl p-2.5 text-xs sm:text-sm font-semibold bg-slate-50">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <label class="text-xs font-bold text-slate-700">ใช้นิ้วหรือปากกาเขียนลายเซ็นลงในกรอบด้านล่าง:</label>
+                                <div class="flex items-center space-x-1.5">
+                                    <span class="text-[10px] text-slate-500">สีหมึก:</span>
+                                    <button type="button" onclick="setSigColor('#0f172a')" class="w-5 h-5 rounded-full bg-slate-900 border-2 border-white ring-1 ring-slate-400 cursor-pointer" title="สีดำ"></button>
+                                    <button type="button" onclick="setSigColor('#1d4ed8')" class="w-5 h-5 rounded-full bg-blue-700 border-2 border-white ring-1 ring-blue-400 cursor-pointer" title="สีน้ำเงิน"></button>
+                                </div>
+                            </div>
+                            <div class="relative border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 overflow-hidden" style="touch-action: none;">
+                                <canvas id="sig-pad-canvas" class="w-full h-44 bg-white cursor-crosshair block"></canvas>
+                                <div id="sig-watermark" class="pointer-events-none absolute inset-0 flex items-center justify-center text-slate-300 text-xs font-bold tracking-widest uppercase select-none">
+                                    ✍️ วาดลายเซ็นที่นี่ (Sign Here)
+                                </div>
+                            </div>
+                        </div>
+
+                        ${currentSig ? `
+                            <div class="p-2.5 bg-slate-50 rounded-xl border flex items-center justify-between text-xs">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] font-bold text-emerald-700">มีลายเซ็นเดิมในระบบแล้ว</span>
+                                    <img src="${currentSig}" class="h-8 max-w-[120px] object-contain border bg-white rounded p-0.5">
+                                </div>
+                                <span class="text-[10px] text-slate-500">เซ็นใหม่ด้านบนเพื่อแทนที่</span>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <div class="flex items-center justify-between pt-2 border-t">
+                        <button type="button" onclick="clearSigCanvas()" class="px-3.5 py-2 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-xl cursor-pointer">
+                            <i class="fa-solid fa-eraser mr-1"></i> ล้างลายเซ็น (Clear)
+                        </button>
+                        <div class="flex items-center space-x-2">
+                            <button type="button" onclick="closeSignatureModal()" class="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer">
+                                ยกเลิก
+                            </button>
+                            <button type="button" onclick="saveSignatureModal()" class="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow cursor-pointer">
+                                <i class="fa-solid fa-check mr-1"></i> ยืนยันบันทึกลายเซ็น
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            setTimeout(() => {
+                initSigCanvasEvents();
+            }, 50);
+        }
+
+        function initSigCanvasEvents() {
+            sigCanvas = document.getElementById('sig-pad-canvas');
+            if (!sigCanvas) return;
+
+            const rect = sigCanvas.getBoundingClientRect();
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            sigCanvas.width = Math.max(300, Math.floor(rect.width * dpr));
+            sigCanvas.height = Math.max(140, Math.floor(rect.height * dpr));
+
+            sigCtx = sigCanvas.getContext('2d');
+            sigCtx.lineCap = 'round';
+            sigCtx.lineJoin = 'round';
+            sigCtx.strokeStyle = currentSigColor;
+            sigCtx.lineWidth = 2.4 * dpr;
+
+            sigDrawn = false;
+            isDrawingSig = false;
+            lastSigPos = null;
+
+            function getCoords(e) {
+                const r = sigCanvas.getBoundingClientRect();
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+                if (e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                }
+                const sx = sigCanvas.width / r.width;
+                const sy = sigCanvas.height / r.height;
+                return {
+                    x: (clientX - r.left) * sx,
+                    y: (clientY - r.top) * sy
+                };
+            }
+
+            function onStart(e) {
+                e.preventDefault();
+                try {
+                    if (e.pointerId && sigCanvas.setPointerCapture) {
+                        sigCanvas.setPointerCapture(e.pointerId);
+                    }
+                } catch (_) {}
+                isDrawingSig = true;
+                const pt = getCoords(e);
+                lastSigPos = pt;
+                sigDrawn = true;
+                const wm = document.getElementById('sig-watermark');
+                if (wm) wm.style.display = 'none';
+
+                sigCtx.beginPath();
+                sigCtx.arc(pt.x, pt.y, sigCtx.lineWidth / 2, 0, Math.PI * 2);
+                sigCtx.fillStyle = currentSigColor;
+                sigCtx.fill();
+            }
+
+            function onMove(e) {
+                if (!isDrawingSig || !lastSigPos) return;
+                e.preventDefault();
+                const pt = getCoords(e);
+                sigCtx.beginPath();
+                sigCtx.moveTo(lastSigPos.x, lastSigPos.y);
+                sigCtx.lineTo(pt.x, pt.y);
+                sigCtx.stroke();
+                lastSigPos = pt;
+            }
+
+            function onEnd(e) {
+                if (!isDrawingSig) return;
+                isDrawingSig = false;
+                lastSigPos = null;
+            }
+
+            sigCanvas.addEventListener('pointerdown', onStart);
+            sigCanvas.addEventListener('pointermove', onMove);
+            sigCanvas.addEventListener('pointerup', onEnd);
+            sigCanvas.addEventListener('pointercancel', onEnd);
+
+            sigCanvas.addEventListener('touchstart', onStart, { passive: false });
+            sigCanvas.addEventListener('touchmove', onMove, { passive: false });
+            sigCanvas.addEventListener('touchend', onEnd);
+        }
+
+        function saveSignatureModal() {
+            if (!currentSigTicketId || !currentSigType) return;
+            const t = state.tickets.find(x => x.id === currentSigTicketId);
+            if (!t) return;
+
+            const existingSig = currentSigType === 'technician' ? t.technicianSignature : t.customerSignature;
+            if (!sigDrawn && !existingSig) {
+                alert('⚠️ กรุณาใช้นิ้วหรือปากกาเขียนลายเซ็นลงในกรอบก่อนกดยืนยัน');
+                return;
+            }
+
+            const nameInput = document.getElementById('signer-name-input');
+            const signerName = nameInput ? nameInput.value.trim() : '';
+            const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+
+            let dataUrl = existingSig;
+            if (sigDrawn && sigCanvas) {
+                const exp = document.createElement('canvas');
+                exp.width = 400;
+                exp.height = 140;
+                const expCtx = exp.getContext('2d');
+                if (expCtx) {
+                    expCtx.drawImage(sigCanvas, 0, 0, exp.width, exp.height);
+                    dataUrl = exp.toDataURL('image/png');
+                } else {
+                    dataUrl = sigCanvas.toDataURL('image/png');
+                }
+            }
+
+            let lineNotice = '';
+            if (currentSigType === 'technician') {
+                t.technicianSignature = dataUrl;
+                t.technicianSignedAt = nowStr;
+                if (signerName) t.assignedTech = signerName;
+                lineNotice = '✍️ [ช่าง ' + (t.assignedTech || 'เทคนิค') + ' ลงลายเซ็นรับรองการปฏิบัติงานแล้ว (' + t.id + ')]';
+                alert('✅ บันทึกลายเซ็นช่างผู้ปฏิบัติงานเรียบร้อย!');
+            } else {
+                t.customerSignature = dataUrl;
+                t.customerSignedAt = nowStr;
+                if (signerName) t.customerSignerName = signerName;
+                if (t.status === 'CUSTOMER_ACCEPTANCE' || state.userRole === 'CUSTOMER') {
+                    t.status = 'CLOSE';
+                    t.isLocked = true;
+                    lineNotice = '🎉 [ลูกค้าเซ็นชื่อตรวจรับงานบนหน้าจอและปิดจบใบงาน (CLOSE) เรียบร้อยแล้ว (' + t.id + ')]';
+                    alert('🎉 บันทึกลายเซ็นลูกค้าตรวจรับงาน และปิดจบใบงานเรียบร้อย!');
+                } else {
+                    lineNotice = '✍️ [ลูกค้าลงลายมือชื่อตรวจรับงานแล้ว (' + t.id + ')]';
+                    alert('✅ บันทึกลายเซ็นลูกค้าผู้ตรวจรับงานเรียบร้อย!');
+                }
+            }
+
+            persistState(lineNotice ? formatTicketLineMessage(t, lineNotice) : '');
+            closeSignatureModal();
+            render();
+        }
+
         const app = {
             goHome: () => { state.currentView = 'home'; render(); },
             openCustomerPortal: () => {
@@ -1510,12 +1767,7 @@
                                     <i class="fa-solid fa-users"></i>
                                 </div>
                                 <h3 class="text-xl font-bold text-slate-900">1. Service Request (สำหรับลูกค้า)</h3>
-                                <p class="text-slate-600 text-xs sm:text-sm mt-2">เลือกกดเข้าดูเฉพาะหมวดที่ต้องการได้ทันที: <b>ติดตามสถานะงานซ่อม</b>, <b>แจ้งซ่อมใหม่</b> หรือดู <b>ตารางงานช่าง (สีแดงเต็มมาก / สีเหลืองรับงานได้ / สีเขียวว่าง)</b></p>
-                                <div class="grid grid-cols-3 gap-2 mt-4" onclick="event.stopPropagation()">
-                                    <button type="button" onclick="app.openCustomerPortal(); switchCustTab('list');" class="p-2.5 rounded-xl border border-orange-200 bg-orange-50/70 hover:bg-orange-500 hover:text-white text-orange-950 font-bold text-xs text-center transition cursor-pointer">🔍 เช็คสถานะงาน</button>
-                                    <button type="button" onclick="app.openCustomerPortal(); switchCustTab('new');" class="p-2.5 rounded-xl border border-orange-200 bg-orange-50/70 hover:bg-orange-500 hover:text-white text-orange-950 font-bold text-xs text-center transition cursor-pointer">➕ แจ้งซ่อมใหม่</button>
-                                    <button type="button" onclick="app.openCustomerPortal(); switchCustTab('schedule');" class="p-2.5 rounded-xl border border-orange-200 bg-orange-50/70 hover:bg-orange-500 hover:text-white text-orange-950 font-bold text-xs text-center transition cursor-pointer">📅 ตารางงานช่าง</button>
-                                </div>
+                                <p class="text-slate-600 text-xs sm:text-sm mt-2">ติดตามสถานะงานซ่อม แจ้งซ่อมใหม่ และตรวจสอบตารางคิวงานช่าง</p>
                             </div>
                             <span class="mt-6 inline-flex items-center text-orange-600 font-bold text-xs sm:text-sm group-hover:translate-x-1 transition-transform">เข้าสู่หน้า Service Request <i class="fa-solid fa-arrow-right ml-1.5"></i></span>
                         </div>
@@ -1528,14 +1780,7 @@
                                         <h3 class="text-xl font-bold text-slate-900">2. เจ้าหน้าที่ภายใน (Internal Staff)</h3>
                                     </div>
                                 </div>
-                                <p class="text-slate-600 text-xs sm:text-sm mt-2">แยกเมนูชัดเจนให้กดเข้าไปดูทีละหมวด ไม่ต้องเลื่อนหน้าจอยาว: <b>รายการใบงาน</b>, <b>แจ้งซ่อมใหม่</b>, <b>ตารางงานช่าง</b>, <b>Dashboard</b> และ <b>ตั้งค่าข้อมูลตั้งต้น</b></p>
-                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4" onclick="event.stopPropagation()">
-                                    <button type="button" onclick="internalActiveTab = 'tickets'; app.openInternalLogin();" class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-900 hover:text-white text-slate-800 font-bold text-xs text-center transition cursor-pointer">📑 ใบงานซ่อม</button>
-                                    <button type="button" onclick="internalActiveTab = 'new_ticket'; app.openInternalLogin();" class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-orange-500 hover:text-white text-slate-800 font-bold text-xs text-center transition cursor-pointer">➕ แจ้งซ่อมใหม่</button>
-                                    <button type="button" onclick="internalActiveTab = 'schedule'; app.openInternalLogin();" class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-600 hover:text-white text-slate-800 font-bold text-xs text-center transition cursor-pointer">📅 ตารางงานช่าง</button>
-                                    <button type="button" onclick="internalActiveTab = 'dashboard'; app.openInternalLogin();" class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-600 hover:text-white text-slate-800 font-bold text-xs text-center transition cursor-pointer">📊 Dashboard</button>
-                                    <button type="button" onclick="openMasterDataModal('brands')" class="col-span-2 sm:col-span-2 p-2.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-950 font-bold text-xs text-center transition cursor-pointer">⚙️ แก้ไขข้อมูลตั้งต้น (ยี่ห้อ / เครื่องจักร / Checklist / ช่าง / โลโก้)</button>
-                                </div>
+                                <p class="text-slate-600 text-xs sm:text-sm mt-2">จัดการใบงานซ่อม ปฏิบัติงานช่าง ตารางงานช่าง สรุป Dashboard และระบบตั้งค่าสำหรับเจ้าหน้าที่</p>
                             </div>
                             <span class="mt-6 inline-flex items-center text-slate-900 font-bold text-xs sm:text-sm group-hover:translate-x-1 transition-transform">เข้าสู่ระบบภายใน <i class="fa-solid fa-arrow-right ml-1.5"></i></span>
                         </div>
@@ -1631,8 +1876,8 @@
                                     <p class="text-slate-500 text-xs">วันขอช่าง/นัดหมาย: <span class="font-bold text-emerald-600">${t.confirmedDate || t.desiredDate}</span> | สถานที่: ${t.location || '-'} | ช่าง: ${t.assignedTech || 'อยู่ระหว่างจัดสรรช่าง'}</p>
                                 </div>
                                 <div class="flex items-center space-x-2">
-                                    <button onclick="openServiceReport('${t.id}')" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
-                                    ${t.status === 'CUSTOMER_ACCEPTANCE' ? `<button onclick="customerAcceptJob('${t.id}')" class="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-check mr-1"></i> ตรวจรับงานและปิดจบ</button>` : ''}
+                                    <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
+                                    <button onclick="openSignatureModal('${t.id}', 'customer')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.customerSignature ? '✓ ลายเซ็นรับงานแล้ว' : (t.status === 'CUSTOMER_ACCEPTANCE' ? '✍️ เซ็นตรวจรับงานและปิดจบ' : '✍️ เซ็นตรวจรับงานบนจอ')}</button>
                                 </div>
                             </div>
                         `).join('')}
@@ -2148,6 +2393,7 @@
                                     <div class="flex flex-wrap items-center gap-2">
                                         ${t.isLocked && state.userRole === 'SUPERVISOR' ? `<button onclick="unlockTicket('${t.id}')" class="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-key mr-1"></i> ปลดล็อก</button>` : ''}
                                         <button onclick="shareTicketToLine('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้ง LINE</button>
+                                        <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง' : '✍️ ลายเซ็นช่าง'}</button>
                                         <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
                                         <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
                                     </div>
@@ -2597,6 +2843,51 @@
                         </div>
                     </div>
                     <div class="space-y-3">${eqHtml}</div>
+
+                    <!-- แผงลายเซ็นออนไลน์บนหน้าจอ (ช่างและลูกค้า) -->
+                    <div class="bg-slate-100 p-3 sm:p-4 rounded-xl border border-slate-300 space-y-2 text-xs">
+                        <div class="flex flex-wrap justify-between items-center gap-1">
+                            <span class="font-bold text-slate-800"><i class="fa-solid fa-signature text-orange-600 mr-1.5"></i> ลายเซ็นออนไลน์บนหน้าจอมือถือ/แท็บเล็ต (Digital Sign-Off):</span>
+                            <span class="text-[10px] text-slate-500">บันทึกลงในเอกสารและพิมพ์ลงไฟล์ PDF ทันที</span>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div class="bg-white p-3 rounded-xl border flex flex-col justify-between space-y-2">
+                                <div>
+                                    <span class="font-bold text-slate-800 block text-xs">1. ลายเซ็นช่างผู้ปฏิบัติงาน (Technician)</span>
+                                    <p class="text-[11px] text-slate-500">ช่าง: ${t.assignedTech || 'ยังไม่ระบุ'}</p>
+                                </div>
+                                <div class="flex items-center justify-between pt-1">
+                                    ${t.technicianSignature ? `
+                                        <div class="flex items-center gap-2">
+                                            <img src="${t.technicianSignature}" class="h-8 max-w-[120px] object-contain border rounded p-0.5 bg-slate-50">
+                                            <span class="text-[10px] text-emerald-700 font-bold">✓ เซ็นแล้ว</span>
+                                        </div>
+                                    ` : '<span class="text-[11px] text-slate-400 italic">ยังไม่ได้เซ็น</span>'}
+                                    <button type="button" onclick="saveModalValuesWithoutClosing('${t.id}'); openSignatureModal('${t.id}', 'technician');" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer">
+                                        <i class="fa-solid fa-pen-nib mr-1"></i> ${t.technicianSignature ? 'แก้ไขลายเซ็นช่าง' : '✍️ เซ็นชื่อช่างบนหน้าจอ'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="bg-white p-3 rounded-xl border flex flex-col justify-between space-y-2">
+                                <div>
+                                    <span class="font-bold text-slate-800 block text-xs">2. ลายเซ็นลูกค้าผู้ตรวจรับงาน (Customer)</span>
+                                    <p class="text-[11px] text-slate-500">ผู้ติดต่อ: ${t.customerSignerName || t.siteContact || t.contact || '-'}</p>
+                                </div>
+                                <div class="flex items-center justify-between pt-1">
+                                    ${t.customerSignature ? `
+                                        <div class="flex items-center gap-2">
+                                            <img src="${t.customerSignature}" class="h-8 max-w-[120px] object-contain border rounded p-0.5 bg-slate-50">
+                                            <span class="text-[10px] text-emerald-700 font-bold">✓ เซ็นแล้ว</span>
+                                        </div>
+                                    ` : '<span class="text-[11px] text-slate-400 italic">ยังไม่ได้เซ็น</span>'}
+                                    <button type="button" onclick="saveModalValuesWithoutClosing('${t.id}'); openSignatureModal('${t.id}', 'customer');" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer">
+                                        <i class="fa-solid fa-signature mr-1"></i> ${t.customerSignature ? 'แก้ไขลายเซ็นลูกค้า' : '✍️ เซ็นชื่อลูกค้าบนหน้าจอ'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="flex justify-end space-x-2 pt-2 border-t text-xs">
                         <button onclick="document.getElementById('action-modal').remove()" class="bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold cursor-pointer">ปิด</button>
                         <button onclick="saveModalChanges('${t.id}')" class="bg-orange-500 text-white px-5 py-2 rounded-xl font-bold shadow cursor-pointer">บันทึกข้อมูล</button>
@@ -2746,6 +3037,8 @@
                 <div class="max-w-3xl mx-auto mb-3 flex flex-wrap justify-between items-center gap-2 bg-white p-3.5 rounded-xl border no-print">
                     <button onclick="state.currentView = state.userRole === 'CUSTOMER' ? 'customer_portal' : 'internal_dashboard'; render();" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3.5 py-2 rounded-xl text-xs cursor-pointer"><i class="fa-solid fa-arrow-left mr-1"></i> ย้อนกลับ</button>
                     <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-pen-nib mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง (แก้ไข)' : '✍️ ช่างเซ็นชื่อบนหน้าจอ'}</button>
+                        <button onclick="openSignatureModal('${t.id}', 'customer')" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.customerSignature ? '✓ ลายเซ็นลูกค้า (แก้ไข)' : '✍️ ลูกค้าเซ็นรับงานบนจอ'}</button>
                         <button onclick="downloadPdfById('standalone-service-report-sheet', 'Service-Report-${t.id}.pdf')" class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-file-pdf mr-1"></i> บันทึกเป็นไฟล์ PDF (Save PDF)</button>
                         <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-900 text-white font-bold px-3.5 py-2 rounded-xl text-xs cursor-pointer"><i class="fa-solid fa-print mr-1"></i> สั่งพิมพ์ (Print A4)</button>
                     </div>
@@ -2859,9 +3152,40 @@
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-6 border-t text-center text-xs">
-                        <div><p>___________________________</p><p class="mt-1 font-bold">(${t.assignedTech || 'ช่างผู้ปฏิบัติงาน'})</p><p class="text-slate-500">ช่างผู้ปฏิบัติงาน (Technician)</p></div>
-                        <div><p>___________________________</p><p class="mt-1 font-bold">(${t.approvedBySupervisor || t.leadTech || 'หัวหน้าช่าง / Supervisor'})</p><p class="text-slate-500">หัวหน้าช่าง / Supervisor ผู้อนุมัติ</p></div>
-                        <div><p>___________________________</p><p class="mt-1 font-bold">(${t.siteContact || t.contact})</p><p class="text-slate-500">ลูกค้าผู้ตรวจรับงาน (Customer Acceptance)</p></div>
+                        <div class="flex flex-col items-center justify-end min-h-[110px]">
+                            ${t.technicianSignature ? `
+                                <img src="${t.technicianSignature}" class="h-14 w-auto object-contain mx-auto mb-1">
+                                <button type="button" onclick="openSignatureModal('${t.id}', 'technician')" class="no-print text-[10px] text-blue-600 hover:underline cursor-pointer mb-1">✎ แก้ไขลายเซ็นช่าง</button>
+                            ` : `
+                                <button type="button" onclick="openSignatureModal('${t.id}', 'technician')" class="no-print mb-2 px-3 py-1 bg-blue-50 text-blue-800 border border-blue-200 rounded-lg text-xs font-bold hover:bg-blue-600 hover:text-white cursor-pointer transition">✍️ เซ็นชื่อช่างบนหน้าจอ</button>
+                            `}
+                            <p class="text-slate-400">___________________________</p>
+                            <p class="mt-1 font-bold">(${t.assignedTech || 'ช่างผู้ปฏิบัติงาน'})</p>
+                            <p class="text-slate-500">ช่างผู้ปฏิบัติงาน (Technician)</p>
+                            ${t.technicianSignedAt ? `<p class="text-[10px] font-mono text-slate-400 mt-0.5">เซ็นเมื่อ: ${t.technicianSignedAt}</p>` : ''}
+                        </div>
+                        <div class="flex flex-col items-center justify-end min-h-[110px]">
+                            ${t.approvedBySupervisor ? `
+                                <span class="inline-block bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold text-[10px] px-2.5 py-1 rounded-md mb-2">✓ APPROVED DIGITAL STAMP</span>
+                            ` : `
+                                <div class="h-8 mb-2"></div>
+                            `}
+                            <p class="text-slate-400">___________________________</p>
+                            <p class="mt-1 font-bold">(${t.approvedBySupervisor || t.leadTech || 'หัวหน้าช่าง / Supervisor'})</p>
+                            <p class="text-slate-500">หัวหน้าช่าง / Supervisor ผู้อนุมัติ</p>
+                        </div>
+                        <div class="flex flex-col items-center justify-end min-h-[110px]">
+                            ${t.customerSignature ? `
+                                <img src="${t.customerSignature}" class="h-14 w-auto object-contain mx-auto mb-1">
+                                <button type="button" onclick="openSignatureModal('${t.id}', 'customer')" class="no-print text-[10px] text-emerald-700 hover:underline cursor-pointer mb-1">✎ แก้ไขลายเซ็นลูกค้า</button>
+                            ` : `
+                                <button type="button" onclick="openSignatureModal('${t.id}', 'customer')" class="no-print mb-2 px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold hover:bg-emerald-600 hover:text-white cursor-pointer transition">✍️ เซ็นรับงานบนหน้าจอ</button>
+                            `}
+                            <p class="text-slate-400">___________________________</p>
+                            <p class="mt-1 font-bold">(${t.customerSignerName || t.siteContact || t.contact || 'ลูกค้าผู้ตรวจรับงาน'})</p>
+                            <p class="text-slate-500">ลูกค้าผู้ตรวจรับงาน (Customer Acceptance)</p>
+                            ${t.customerSignedAt ? `<p class="text-[10px] font-mono text-slate-400 mt-0.5">เซ็นเมื่อ: ${t.customerSignedAt}</p>` : ''}
+                        </div>
                     </div>
 
                     <div class="bg-emerald-50 border border-emerald-200 p-2.5 rounded-lg text-center font-bold text-emerald-800 text-xs">
