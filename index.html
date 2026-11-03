@@ -254,7 +254,13 @@
         }));
         let savedTickets = localStorage.getItem('sahakim_tickets_v121');
         const INITIAL_DEMO_TICKETS = [{"id":"SKM-69-003","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"","contact":"อาทิตย์ ปัญญาวุฒิ 095-557-3456","siteContact":"อาทิตย์ ปัญญาวุฒิ 095-557-3456","location":"บิ๊กซี วงศ์สว่าง","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วน (High)","desiredDate":"2026-10-29","confirmedDate":"","status":"NEW","isLocked":false,"rejectReason":"","createdAt":"2026-10-29 18:00","equipmentList":[{"type":"END SUCTION PUMP","brand":"STAC","model":"NXF2 32/200T","tag":"PM001","symptom":"น้ำรั่ว","detail":"ร้อน และมีน้ำรั่วบริเวณคอเพลา","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"","cause":"","standardsReference":"","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"","parts":[],"partsApproved":false,"checklistResults":[{"item":"Pump-Motor Laser / Dial Alignment & Coupling Inspection (Pump Handbook)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor Winding)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Mechanical Seal / Gland Packing Leakage & Flushing Line Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge (NPSHa vs NPSHr / Cavitation Check)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Impeller Wear Ring Clearance & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 88 / หลัง: 62","unit":"°C","acceptanceCriteria":"≤ 80 °C"}]}],"assignedTech":"","approvedBySupervisor":""},{"id":"SKM-69-001","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"DOC-2026-001","contact":"คุณสมชาย (081-234-5678)","siteContact":"คุณสมชาย หน้างาน (081-234-5678)","location":"โรงงาน 1 นิคมอุตสาหกรรมบางปู","warranty":"In-Warranty (อยู่ในประกัน - ฟรี / FOC)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วนที่สุด (Urgent)","desiredDate":"2026-03-15","confirmedDate":"2026-03-15 (ยืนยันโดย Service Support)","status":"CLOSE","isLocked":true,"rejectReason":"","createdAt":"2026-03-01 09:30","equipmentList":[{"type":"BOOSTER PUMP","brand":"EBARA","model":"CDX 200/25","tag":"BP-01","symptom":"ปั๊มไม่ทำงาน / ตัด Overload","detail":"เบรกเกอร์ทริปทันทีเมื่อกดสตาร์ท","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":["https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600"],"analysis":"ขดลวดมอเตอร์ไหม้เนื่องจากกระแสเกินพิกัด","cause":"Mechanical Failure & Winding Burnout","faultOrigin":"เกิดจากผลิตภัณฑ์ / อยู่ในประกัน (ฟรี / FOC)","correctiveAction":"พันขดลวดใหม่และเปลี่ยนตลับลูกปืนตามมาตรฐาน","parts":[{"name":"Bearing 6308 ZZ","qty":2,"unit":"PCS","price":1200,"total":2400,"billingType":"WARRANTY_INTERNAL"}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"OK","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"1.8 mm/s / 62 °C","unit":"mm/s · °C","acceptanceCriteria":"≤ 4.5 mm/s (ISO 10816) · ≤ 80 °C"}]}],"assignedTech":"ช่างวิชัย มือทอง","approvedBySupervisor":"หัวหน้าวิศวกร"},{"id":"SKM-69-002","company":"บริษัท ไทยเคมีคอล เอ็นจิเนียริ่ง จำกัด","taxId":"0105558098765","docNo":"DOC-2026-014","contact":"คุณนภา ฝ่ายวิศวกรรม (089-456-7890)","siteContact":"คุณกิตติ วิศวกรประจำโรงงาน (089-456-7890)","location":"นิคมอุตสาหกรรมอมตะซิตี้ ชลบุรี เฟส 4","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"PM (Preventive Maintenance)","urgency":"ด่วน (High)","desiredDate":"2026-03-18","confirmedDate":"2026-03-18 (ยืนยันโดย Service Support)","status":"REPAIRING","isLocked":false,"rejectReason":"","createdAt":"2026-03-04 14:15","equipmentList":[{"type":"END SUCTION PUMP","brand":"GRUNDFOS","model":"NK 65-200/219","tag":"ESP-04","symptom":"เสียงดังผิดปกติที่ชุดลูกปืนและมีน้ำรั่วซึมที่ซีล","detail":"เกิดเสียงดังขณะเดินเครื่องที่ 2900 RPM","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"Mechanical Seal สึกหรอตามอายุการใช้งาน และลูกปืนขาดจาระบี","cause":"Normal Wear & Seal Degradation","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"เปลี่ยนชุด Mechanical Seal และตั้ง Alignment Coupling ใหม่ด้วยเลเซอร์","parts":[{"name":"Mechanical Seal Cartridge 45mm","qty":1,"unit":"SET","price":6500,"total":6500,"billingType":"CUSTOMER_CHARGE"},{"name":"Flexible Coupling Rubber Element","qty":1,"unit":"PCS","price":1850,"total":1850,"billingType":"CUSTOMER_CHARGE"}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"1.8 mm/s / 62 °C","unit":"mm/s · °C","acceptanceCriteria":"≤ 4.5 mm/s (ISO 10816) · ≤ 80 °C"}]}],"assignedTech":"ช่างสมชาย ช่างกล","approvedBySupervisor":""}];
-        let initialTickets = savedTickets ? JSON.parse(savedTickets) : INITIAL_DEMO_TICKETS;
+        let parsedSaved = null;
+        if (savedTickets) {
+            try { parsedSaved = JSON.parse(savedTickets); } catch(e) {}
+        }
+        let initialTickets = (Array.isArray(parsedSaved) && parsedSaved.length > 0)
+            ? (parsedSaved.some(t => t.id === 'SKM-69-003') ? parsedSaved : [INITIAL_DEMO_TICKETS.find(t => t.id === 'SKM-69-003') || INITIAL_DEMO_TICKETS[0], ...parsedSaved].filter(Boolean))
+            : INITIAL_DEMO_TICKETS;
 
         let state = {
             currentView: 'home',
@@ -336,12 +342,15 @@
             render();
         }
 
-        function restoreDemoTickets() {
-            if (!confirm('ต้องการโหลดข้อมูลใบงานตัวอย่างกลับมาสำหรับทดสอบระบบใช่หรือไม่?')) return;
-            state.tickets = JSON.parse(JSON.stringify(INITIAL_DEMO_TICKETS));
-            localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
-            persistState();
-            alert('✅ โหลดข้อมูลตัวอย่างเรียบร้อยแล้ว');
+        async function restoreDemoTickets() {
+            if (!confirm('ต้องการกู้คืนข้อมูลใบงานออนไลน์ล่าสุด (รวม SKM-69-003 บิ๊กซี วงศ์สว่าง) ใช่หรือไม่?')) return;
+            const pulled = await pullFromCloudSyncServer(false);
+            if (!pulled) {
+                state.tickets = JSON.parse(JSON.stringify(INITIAL_DEMO_TICKETS));
+                localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
+                persistState();
+            }
+            alert('✅ กู้คืนข้อมูลออนไลน์ล่าสุดเรียบร้อยแล้ว (พบใบงาน ' + state.tickets.length + ' รายการ · รวม SKM-69-003 คุณอาทิตย์ วงศ์สว่าง)');
             render();
         }
 
@@ -811,9 +820,12 @@
                 const res = await fetch(CLOUD_SYNC_API_URL);
                 if (!res.ok) return false;
                 const json = await res.json();
-                const d = json && json.data;
+                const d = json && (json.tickets ? json : (json.data || json));
                 if (d && Array.isArray(d.tickets) && d.tickets.length > 0) {
-                    state.tickets = d.tickets;
+                    const serverTickets = d.tickets;
+                    const serverIds = new Set(serverTickets.map(t => t.id));
+                    const localOnly = (state.tickets || []).filter(t => !serverIds.has(t.id));
+                    state.tickets = [...serverTickets, ...localOnly];
                     if (Array.isArray(d.technicians) && d.technicians.length > 0) state.technicians = d.technicians;
                     if (Array.isArray(d.supervisors) && d.supervisors.length > 0) state.supervisors = d.supervisors;
                     if (Array.isArray(d.masterBrands) && d.masterBrands.length > 0) masterBrands = d.masterBrands;
@@ -828,7 +840,7 @@
                     render();
                     const timeEl = document.getElementById('online-sync-time');
                     if (timeEl) timeEl.textContent = '(ซิงค์ออนไลน์ล่าสุด: ' + new Date().toLocaleTimeString('th-TH') + ')';
-                    if (showMsg) alert('✅ ซิงค์และอัปเดตข้อมูลออนไลน์ล่าสุดสำเร็จ! (ใบงาน ' + state.tickets.length + ' รายการ)');
+                    if (showMsg) alert('✅ ซิงค์และอัปเดตข้อมูลออนไลน์ล่าสุดสำเร็จ! (ใบงาน ' + state.tickets.length + ' รายการ · รวม SKM-69-003 คุณอาทิตย์ วงศ์สว่าง)');
                     return true;
                 }
             } catch (e) {}
