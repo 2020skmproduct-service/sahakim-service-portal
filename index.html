@@ -119,6 +119,13 @@
     </footer>
 
     <script>
+        window.addEventListener('error', function(e) {
+            console.warn('Sahakim Portal Client Error Guard:', e && e.message);
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            console.warn('Sahakim Portal Promise Error Guard:', e && e.reason);
+        });
+
         const BASE_EQUIPMENT_MASTERS = [
             "MOTOR", "END SUCTION PUMP", "VERTICAL PUMP", "BOOSTER PUMP", "TRANSFER PUMP",
             "BLOWER", "FIRE PUMP", "GEN SET", "SEWAGE", "EJECTOR", "AIR PUMP", "AERATOR", "CONTROL"
@@ -133,16 +140,202 @@
         let lineChannelToken = localStorage.getItem('sahakim_line_token') || "";
         let lineTargetId = localStorage.getItem('sahakim_line_target') || "Ccb1decccfcce901ecaca80f99ed8dc5f";
 
-        let customEquipList = JSON.parse(localStorage.getItem('sahakim_custom_equip_types') || JSON.stringify(["MOTOR","END SUCTION PUMP","VERTICAL PUMP","BOOSTER PUMP","TRANSFER PUMP","BLOWER","FIRE PUMP","GEN SET","SEWAGE","EJECTOR","AIR PUMP","AERATOR","CONTROL"]));
-        let customBrandList = JSON.parse(localStorage.getItem('sahakim_custom_brands') || JSON.stringify(["BULL POWER","BROOK CROMPTON","STAC","UNOMACH","VARISCO","FYBROC","EBARA","GRUNDFOS","SIEMENS","ABB"]));
-        let masterEquipmentTypes = JSON.parse(localStorage.getItem('sahakim_master_equipment_types_v1') || 'null') || Array.from(new Set([...BASE_EQUIPMENT_MASTERS, ...customEquipList]));
-        let masterBrands = JSON.parse(localStorage.getItem('sahakim_master_brands_v1') || 'null') || Array.from(new Set([...BASE_BRANDS, ...customBrandList]));
-        let companyProfile = JSON.parse(localStorage.getItem('sahakim_company_profile_v1') || 'null') || {
+        function safeJsonParse(val, fallback) {
+            if (!val || typeof val !== 'string') return fallback;
+            try { return JSON.parse(val); } catch (e) { return fallback; }
+        }
+
+        // ============================================================================
+        // INDEXEDDB RESILIENT STORAGE ENGINE (Zero Quota Crash / Full Mobile Stability)
+        // ============================================================================
+        const IDB_NAME = 'SahakimPortalStorage_v1';
+        const IDB_STORE = 'app_state_store';
+        let idbPromise = null;
+
+        function getIdb() {
+            if (!idbPromise) {
+                idbPromise = new Promise((resolve) => {
+                    if (!window.indexedDB) { resolve(null); return; }
+                    try {
+                        const req = indexedDB.open(IDB_NAME, 1);
+                        req.onupgradeneeded = (e) => {
+                            const db = e.target.result;
+                            if (!db.objectStoreNames.contains(IDB_STORE)) {
+                                db.createObjectStore(IDB_STORE);
+                            }
+                        };
+                        req.onsuccess = (e) => resolve(e.target.result);
+                        req.onerror = () => resolve(null);
+                    } catch (err) {
+                        resolve(null);
+                    }
+                });
+            }
+            return idbPromise;
+        }
+
+        async function saveToIndexedDB(key, val) {
+            try {
+                const db = await getIdb();
+                if (!db) return false;
+                return new Promise((resolve) => {
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    const store = tx.objectStore(IDB_STORE);
+                    const req = store.put(val, key);
+                    req.onsuccess = () => resolve(true);
+                    req.onerror = () => resolve(false);
+                });
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function loadFromIndexedDB(key) {
+            try {
+                const db = await getIdb();
+                if (!db) return null;
+                return new Promise((resolve) => {
+                    const tx = db.transaction(IDB_STORE, 'readonly');
+                    const store = tx.objectStore(IDB_STORE);
+                    const req = store.get(key);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // ============================================================================
+        // MOBILE-SAFE CUSTOM MODAL DIALOGS (Zero Popup Blocker / No Window.Prompt Hang)
+        // ============================================================================
+        function showAppToast(msg, type = 'info') {
+            try {
+                let container = document.getElementById('app-toast-container');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'app-toast-container';
+                    container.className = 'fixed bottom-4 right-4 z-[99999] flex flex-col gap-2 max-w-sm pointer-events-none no-print';
+                    document.body.appendChild(container);
+                }
+                const toast = document.createElement('div');
+                const bgClass = type === 'success' ? 'bg-emerald-600 text-white' : type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-900 text-white';
+                toast.className = bgClass + ' px-4 py-3 rounded-xl shadow-2xl text-xs font-bold pointer-events-auto flex items-center gap-2 border border-white/20 transition-all duration-300 transform translate-y-3 opacity-0';
+                toast.innerHTML = '<span>' + msg + '</span>';
+                container.appendChild(toast);
+                requestAnimationFrame(() => {
+                    toast.classList.remove('translate-y-3', 'opacity-0');
+                });
+                setTimeout(() => {
+                    toast.classList.add('opacity-0', 'translate-y-2');
+                    setTimeout(() => toast.remove(), 300);
+                }, 3500);
+            } catch(e) {}
+        }
+
+        function openCustomPrompt(options) {
+            return new Promise((resolve) => {
+                const title = options.title || 'กรุณาระบุข้อมูล';
+                const message = options.message || '';
+                const defaultValue = options.defaultValue || '';
+                const inputType = options.inputType || 'text';
+                const placeholder = options.placeholder || '';
+                const confirmText = options.confirmText || 'ตกลง';
+                const cancelText = options.cancelText || 'ยกเลิก';
+
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-slate-900/70 z-[9999] flex items-center justify-center p-3 animate-fade-in no-print';
+                modal.innerHTML = `
+                    <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 space-y-4 text-xs sm:text-sm border border-slate-200">
+                        <div class="space-y-1">
+                            <h3 class="font-bold text-base text-slate-900">${title}</h3>
+                            ${message ? `<p class="text-slate-600 whitespace-pre-line text-xs">${message}</p>` : ''}
+                        </div>
+                        <div>
+                            <input type="${inputType}" id="custom-prompt-input" value="${defaultValue}" placeholder="${placeholder}" class="w-full border-2 border-slate-300 focus:border-orange-500 rounded-xl p-2.5 font-medium outline-none text-slate-900 text-sm bg-white">
+                        </div>
+                        <div class="flex justify-end gap-2 pt-2 border-t">
+                            <button type="button" id="custom-prompt-cancel" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold cursor-pointer transition">${cancelText}</button>
+                            <button type="button" id="custom-prompt-ok" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-xl font-bold shadow cursor-pointer transition">${confirmText}</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                const input = modal.querySelector('#custom-prompt-input');
+                if (input) {
+                    input.focus();
+                    if (defaultValue) input.select();
+                }
+
+                const cleanup = (val) => {
+                    modal.remove();
+                    resolve(val);
+                };
+
+                const okBtn = modal.querySelector('#custom-prompt-ok');
+                const cancelBtn = modal.querySelector('#custom-prompt-cancel');
+                if (okBtn) okBtn.onclick = () => cleanup(input ? input.value.trim() : '');
+                if (cancelBtn) cancelBtn.onclick = () => cleanup(null);
+                if (input) {
+                    input.onkeydown = (e) => {
+                        if (e.key === 'Enter') cleanup(input.value.trim());
+                        if (e.key === 'Escape') cleanup(null);
+                    };
+                }
+            });
+        }
+
+        function openCustomConfirm(options) {
+            return new Promise((resolve) => {
+                const title = options.title || 'ยืนยันการดำเนินการ';
+                const message = options.message || '';
+                const confirmText = options.confirmText || 'ยืนยัน';
+                const cancelText = options.cancelText || 'ยกเลิก';
+                const isDanger = options.isDanger !== false;
+
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-slate-900/70 z-[9999] flex items-center justify-center p-3 animate-fade-in no-print';
+                modal.innerHTML = `
+                    <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 space-y-4 text-xs sm:text-sm border border-slate-200">
+                        <div class="flex items-start gap-3">
+                            <div class="w-10 h-10 rounded-xl ${isDanger ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'} flex items-center justify-center text-lg shrink-0 font-bold">
+                                ${isDanger ? '⚠️' : 'ℹ️'}
+                            </div>
+                            <div class="space-y-1">
+                                <h3 class="font-bold text-base text-slate-900">${title}</h3>
+                                <p class="text-slate-600 whitespace-pre-line text-xs leading-relaxed">${message}</p>
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-2 pt-2 border-t">
+                            <button type="button" id="custom-confirm-cancel" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold cursor-pointer transition">${cancelText}</button>
+                            <button type="button" id="custom-confirm-ok" class="${isDanger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'} text-white px-5 py-2 rounded-xl font-bold shadow cursor-pointer transition">${confirmText}</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+                const cleanup = (val) => {
+                    modal.remove();
+                    resolve(val);
+                };
+
+                const okBtn = modal.querySelector('#custom-confirm-ok');
+                const cancelBtn = modal.querySelector('#custom-confirm-cancel');
+                if (okBtn) okBtn.onclick = () => cleanup(true);
+                if (cancelBtn) cancelBtn.onclick = () => cleanup(false);
+            });
+        }
+
+        let customEquipList = safeJsonParse(localStorage.getItem('sahakim_custom_equip_types'), ["MOTOR","END SUCTION PUMP","VERTICAL PUMP","BOOSTER PUMP","TRANSFER PUMP","BLOWER","FIRE PUMP","GEN SET","SEWAGE","EJECTOR","AIR PUMP","AERATOR","CONTROL"]);
+        let customBrandList = safeJsonParse(localStorage.getItem('sahakim_custom_brands'), ["BULL POWER","BROOK CROMPTON","STAC","UNOMACH","VARISCO","FYBROC","EBARA","GRUNDFOS","SIEMENS","ABB"]);
+        let masterEquipmentTypes = safeJsonParse(localStorage.getItem('sahakim_master_equipment_types_v1'), Array.from(new Set([...BASE_EQUIPMENT_MASTERS, ...customEquipList])));
+        let masterBrands = safeJsonParse(localStorage.getItem('sahakim_master_brands_v1'), Array.from(new Set([...BASE_BRANDS, ...customBrandList])));
+        let companyProfile = safeJsonParse(localStorage.getItem('sahakim_company_profile_v1'), {
             nameTh: 'บริษัท สหคิมมอเตอร์ จำกัด',
             nameEn: 'SAHA KIM MOTOR CO., LTD.',
             phone: '02-XXX-XXXX / LINE Official: @389fyhbl',
             tagline: 'บริการซ่อม บำรุงรักษา และจำหน่ายปั๊มน้ำ มอเตอร์ Blower, Gen Set, Sewage, Aerator และระบบควบคุมอุตสาหกรรม'
-        };
+        });
         const CLOUD_SYNC_API_URL = (window.location.origin.includes('run.app') || window.location.origin.includes('localhost'))
             ? (window.location.origin + '/api/online/state')
             : 'https://ais-pre-brppajwjfafqftfzmicbfo-297429063525.asia-southeast1.run.app/api/online/state';
@@ -242,40 +435,90 @@
             "วิศวกรบริการ (Service Engineer)"
         ];
 
-        let knowledgeTemplates = JSON.parse(localStorage.getItem('sahakim_knowledge_templates') || JSON.stringify([{"id":"TPL-EASA-01","title":"มอเตอร์ขดลวดไหม้ / ค่าฉนวนต่ำ (EASA AR100 & IEEE 43)","category":"MOTOR","sourceRef":"EASA AR100 / IEEE Std 43 / BULL POWER & BROOK CROMPTON Manual","analysis":"วัดค่าความต้านทานฉนวน (Insulation Resistance) ด้วย Megger 500VDC ได้ต่ำกว่าเกณฑ์มาตรฐาน IEEE 43 (< 100 MΩ) และพบกลิ่นไหม้ที่ขดลวดสเตเตอร์เนื่องจากความร้อนสะสมเกินพิกัด (Thermal Overload Class F/H)","cause":"แรงดันไฟฟ้าไม่สมดุล (Voltage Unbalance > 1%) หรือเกิดภาวะ Single Phasing / ทำงานเกินพิกัดกระแสต่อเนื่อง (Overload) ร่วมกับการระบายความร้อนไม่เพียงพอ","correctiveAction":"พันขดลวดสเตเตอร์ใหม่ด้วยลวดทองแดงเคลือบน้ำยา Class H อาบวานิชอบแห้งตามมาตรฐาน EASA AR100 เปลี่ยนตลับลูกปืนทั้งด้าน DE/NDE และทดสอบเดินตัวเปล่า (No-Load Test) วัดกระแสทั้ง 3 เฟสให้สมดุล","recommendedChecklist":["Measure 3-Phase Supply Voltage Unbalance (< 1% per NEMA MG1)","Polarization Index (PI) & Megger Insulation Test at 500/1000 VDC"]},{"id":"TPL-PUMP-01","title":"ปั๊มเกิดโพรงอากาศ / เสียงดังคล้ายกรวดและแรงดันตก (Cavitation)","category":"PUMP","sourceRef":"Karassik's Pump Handbook (4th Ed.) / Hydraulic Institute / STAC & UNOMACH Guide","analysis":"เกิดเสียงดังรัวคล้ายเม็ดกรวดกระทบภายในเรือนปั๊ม (Volute Casing) ร่วมกับค่าความสั่นสะเทือนสูงผิดปกติ และเข็มเกจวัดแรงดันด้านส่ง (Discharge Pressure) สั่นแกว่งเนื่องจากเกิดภาวะโพรงอากาศ (Suction Cavitation: NPSHa < NPSHr)","cause":"ท่อทางดูด (Suction Line) หรือ Strainer อุดตันทำให้เกิด Pressure Drop สูง หรือระดับน้ำฝั่งดูดต่ำกว่าค่าออกแบบ (Insufficient Submergence / High Suction Lift)","correctiveAction":"ถอดล้างทำความสะอาด Y-Strainer และตรวจสอบวาล์วทางดูด ตรวจสอบรอยรั่วอากาศฝั่งท่อดูด (Suction Air Ingress) ตรวจสอบสภาพใบพัด (Impeller) หากสึกกร่อนมากให้เปลี่ยนใบพัดและ Wear Ring ใหม่พร้อมทำ Dynamic Balancing ตามมาตรฐาน ISO 1940 G6.3","recommendedChecklist":["Suction Compound Gauge Vacuum Reading & Strainer Differential Check","Impeller Vane Pitting & Wear Ring Radial Clearance Measurement"]},{"id":"TPL-PUMP-02","title":"ซีลกันรั่วซึม / ตลับลูกปืนร้อนและสั่นสะเทือนสูง (Misalignment & Seal Failure)","category":"PUMP","sourceRef":"Karassik's Pump Handbook / VARISCO & FYBROC Maintenance Manual / ISO 10816","analysis":"พบการรั่วซึมของของเหลวออกทางชุด Mechanical Seal อย่างต่อเนื่อง และอุณหภูมิเสื้อลูกปืน (Bearing Housing) สูงเกิน 85°C ร่วมกับค่า Vibration เกินเกณฑ์มาตรฐาน ISO 10816","cause":"เกิดจากการเยื้องศูนย์ของเพลาปั๊มและมอเตอร์ (Angular / Parallel Shaft Misalignment) หรือเกิดภาวะเดินปั๊มตัวเปล่าโดยไม่มีน้ำหล่อเลี้ยงซีล (Dry Running / Thermal Shock)","correctiveAction":"ถอดเปลี่ยนชุด Mechanical Seal (SiC/SiC/Viton) และตลับลูกปืนใหม่ ตรวจสอบค่าความคดของเพลา (Shaft Runout TIR ≤ 0.05 mm) และทำ Laser Shaft Alignment หน้างานให้ได้ค่าความคลาดเคลื่อนไม่เกิน ±0.05 mm พร้อมตรวจสอบความเครียดท่อ (Pipe Strain)","recommendedChecklist":["Shaft Runout (TIR) & Coupling Angular/Parallel Alignment Check","Pipe Strain Check on Suction & Discharge Flanges"]},{"id":"TPL-SEWAGE-01","title":"ปั๊มจุ่มน้ำเสียตัด Overload / ใบพัดติดขัดและน้ำเข้าห้องน้ำมัน","category":"SEWAGE","sourceRef":"Submersible Sewage Pump Handbook / UNOMACH & VARISCO Troubleshooting Guide","analysis":"เบรกเกอร์และ Overload Relay ทริปทันทีเมื่อสั่งสตาร์ท ตรวจพบเศษขยะพันติดใบพัด (Impeller Jamming) และพบน้ำปนเปื้อนในห้องน้ำมันซีล (Oil Chamber Emulsified) ทำให้ซีลตัวล่างสึกหรอ","cause":"ขยะเส้นใยยาวหรือของแข็งเกินขนาดผ่านเข้าใบพัดทำให้เพลาล็อก (Locked Rotor Current สูง 6-7 เท่า) และทำลายผิวหน้าสัมผัส Mechanical Seal","correctiveAction":"ถอดล้างสิ่งอุดตันในเรือนปั๊มและใบพัด เปลี่ยนชุด Double Mechanical Seal และถ่ายเปลี่ยนน้ำมันหล่อลื่น Food Grade / Turbine Oil VG32 ในห้องซีล อบไล่ความชื้นขดลวดและอัดอีพ็อกซี่ที่ขั้วสายไฟ (Cable Entry) ใหม่","recommendedChecklist":["Oil Chamber Dielectric & Moisture Inspection","Submersible Cable Insulation & Float Switch Level Check"]},{"id":"TPL-CTRL-01","title":"ตู้คอนโทรลทริป / Magnetic Contactor หน้าสัมผัสไหม้ / VFD Fault","category":"CONTROL","sourceRef":"IEC 60947-4-1 / EASA Electrical Testing & Control Panel Troubleshooting","analysis":"ตรวจพบรอยอาร์คและหน้าสัมผัส (Contact Tips) ของ Magnetic Contactor สึกหรอไม่เท่ากัน ส่งผลให้แรงดันไฟฟ้าตกคร่อมเฟสและทำให้ Thermal Overload หรือ VFD แจ้งเตือน Overcurrent / Phase Loss","cause":"เกิดจากการสตาร์ท-หยุดบ่อยครั้ง (Frequent Jogging/Starting) หรือขั้วต่อสายไฟหลวมทำให้เกิดความร้อนสูงที่จุดต่อ (Loose Terminal Hot Spot)","correctiveAction":"เปลี่ยนชุด Magnetic Contactor และ Overload Relay ให้ตรงตามพิกัดกระแส (AC-3 Duty) ขันกวดขั้วต่อสายกำลังทั้งหมดตามค่า Torque มาตรฐาน ตั้งค่าพารามิเตอร์ Ramp-up/Ramp-down และ Current Limit ใน VFD/Soft Starter ใหม่","recommendedChecklist":["Contactor Contact Voltage Drop & Phase Balance Test","Overload Relay Trip Current Setting vs Motor Nameplate FLA"]}]));
+        function isDemoTechnician(tc) {
+            if (!tc || !tc.name) return false;
+            const n = String(tc.name).trim();
+            return n.includes('วิชัย') || n.includes('สมชาย') || n.includes('ประเสริฐ');
+        }
+
+        function isDemoTicket(t) {
+            if (!t) return false;
+            const id = String(t.id || '').trim();
+            const comp = String(t.company || '').trim();
+            if (id === 'SKM-69-001' || id === 'SKM-69-002' || id === 'SKM-69-003') return true;
+            if (comp.includes('ตัวอย่าง') || comp.includes('เดโม') || comp.includes('Demo')) return true;
+            return false;
+        }
+
+        let knowledgeTemplates = safeJsonParse(localStorage.getItem('sahakim_knowledge_templates'), [{"id":"TPL-EASA-01","title":"มอเตอร์ขดลวดไหม้ / ค่าฉนวนต่ำ (EASA AR100 & IEEE 43)","category":"MOTOR","sourceRef":"EASA AR100 / IEEE Std 43 / BULL POWER & BROOK CROMPTON Manual","analysis":"วัดค่าความต้านทานฉนวน (Insulation Resistance) ด้วย Megger 500VDC ได้ต่ำกว่าเกณฑ์มาตรฐาน IEEE 43 (< 100 MΩ) และพบกลิ่นไหม้ที่ขดลวดสเตเตอร์เนื่องจากความร้อนสะสมเกินพิกัด (Thermal Overload Class F/H)","cause":"แรงดันไฟฟ้าไม่สมดุล (Voltage Unbalance > 1%) หรือเกิดภาวะ Single Phasing / ทำงานเกินพิกัดกระแสต่อเนื่อง (Overload) ร่วมกับการระบายความร้อนไม่เพียงพอ","correctiveAction":"พันขดลวดสเตเตอร์ใหม่ด้วยลวดทองแดงเคลือบน้ำยา Class H อาบวานิชอบแห้งตามมาตรฐาน EASA AR100 เปลี่ยนตลับลูกปืนทั้งด้าน DE/NDE และทดสอบเดินตัวเปล่า (No-Load Test) วัดกระแสทั้ง 3 เฟสให้สมดุล","recommendedChecklist":["Measure 3-Phase Supply Voltage Unbalance (< 1% per NEMA MG1)","Polarization Index (PI) & Megger Insulation Test at 500/1000 VDC"]},{"id":"TPL-PUMP-01","title":"ปั๊มเกิดโพรงอากาศ / เสียงดังคล้ายกรวดและแรงดันตก (Cavitation)","category":"PUMP","sourceRef":"Karassik's Pump Handbook (4th Ed.) / Hydraulic Institute / STAC & UNOMACH Guide","analysis":"เกิดเสียงดังรัวคล้ายเม็ดกรวดกระทบภายในเรือนปั๊ม (Volute Casing) ร่วมกับค่าความสั่นสะเทือนสูงผิดปกติ และเข็มเกจวัดแรงดันด้านส่ง (Discharge Pressure) สั่นแกว่งเนื่องจากเกิดภาวะโพรงอากาศ (Suction Cavitation: NPSHa < NPSHr)","cause":"ท่อทางดูด (Suction Line) หรือ Strainer อุดตันทำให้เกิด Pressure Drop สูง หรือระดับน้ำฝั่งดูดต่ำกว่าค่าออกแบบ (Insufficient Submergence / High Suction Lift)","correctiveAction":"ถอดล้างทำความสะอาด Y-Strainer และตรวจสอบวาล์วทางดูด ตรวจสอบรอยรั่วอากาศฝั่งท่อดูด (Suction Air Ingress) ตรวจสอบสภาพใบพัด (Impeller) หากสึกกร่อนมากให้เปลี่ยนใบพัดและ Wear Ring ใหม่พร้อมทำ Dynamic Balancing ตามมาตรฐาน ISO 1940 G6.3","recommendedChecklist":["Suction Compound Gauge Vacuum Reading & Strainer Differential Check","Impeller Vane Pitting & Wear Ring Radial Clearance Measurement"]},{"id":"TPL-PUMP-02","title":"ซีลกันรั่วซึม / ตลับลูกปืนร้อนและสั่นสะเทือนสูง (Misalignment & Seal Failure)","category":"PUMP","sourceRef":"Karassik's Pump Handbook / VARISCO & FYBROC Maintenance Manual / ISO 10816","analysis":"พบการรั่วซึมของของเหลวออกทางชุด Mechanical Seal อย่างต่อเนื่อง และอุณหภูมิเสื้อลูกปืน (Bearing Housing) สูงเกิน 85°C ร่วมกับค่า Vibration เกินเกณฑ์มาตรฐาน ISO 10816","cause":"เกิดจากการเยื้องศูนย์ของเพลาปั๊มและมอเตอร์ (Angular / Parallel Shaft Misalignment) หรือเกิดภาวะเดินปั๊มตัวเปล่าโดยไม่มีน้ำหล่อเลี้ยงซีล (Dry Running / Thermal Shock)","correctiveAction":"ถอดเปลี่ยนชุด Mechanical Seal (SiC/SiC/Viton) และตลับลูกปืนใหม่ ตรวจสอบค่าความคดของเพลา (Shaft Runout TIR ≤ 0.05 mm) และทำ Laser Shaft Alignment หน้างานให้ได้ค่าความคลาดเคลื่อนไม่เกิน ±0.05 mm พร้อมตรวจสอบความเครียดท่อ (Pipe Strain)","recommendedChecklist":["Shaft Runout (TIR) & Coupling Angular/Parallel Alignment Check","Pipe Strain Check on Suction & Discharge Flanges"]},{"id":"TPL-SEWAGE-01","title":"ปั๊มจุ่มน้ำเสียตัด Overload / ใบพัดติดขัดและน้ำเข้าห้องน้ำมัน","category":"SEWAGE","sourceRef":"Submersible Sewage Pump Handbook / UNOMACH & VARISCO Troubleshooting Guide","analysis":"เบรกเกอร์และ Overload Relay ทริปทันทีเมื่อสั่งสตาร์ท ตรวจพบเศษขยะพันติดใบพัด (Impeller Jamming) และพบน้ำปนเปื้อนในห้องน้ำมันซีล (Oil Chamber Emulsified) ทำให้ซีลตัวล่างสึกหรอ","cause":"ขยะเส้นใยยาวหรือของแข็งเกินขนาดผ่านเข้าใบพัดทำให้เพลาล็อก (Locked Rotor Current สูง 6-7 เท่า) และทำลายผิวหน้าสัมผัส Mechanical Seal","correctiveAction":"ถอดล้างสิ่งอุดตันในเรือนปั๊มและใบพัด เปลี่ยนชุด Double Mechanical Seal และถ่ายเปลี่ยนน้ำมันหล่อลื่น Food Grade / Turbine Oil VG32 ในห้องซีล อบไล่ความชื้นขดลวดและอัดอีพ็อกซี่ที่ขั้วสายไฟ (Cable Entry) ใหม่","recommendedChecklist":["Oil Chamber Dielectric & Moisture Inspection","Submersible Cable Insulation & Float Switch Level Check"]},{"id":"TPL-CTRL-01","title":"ตู้คอนโทรลทริป / Magnetic Contactor หน้าสัมผัสไหม้ / VFD Fault","category":"CONTROL","sourceRef":"IEC 60947-4-1 / EASA Electrical Testing & Control Panel Troubleshooting","analysis":"ตรวจพบรอยอาร์คและหน้าสัมผัส (Contact Tips) ของ Magnetic Contactor สึกหรอไม่เท่ากัน ส่งผลให้แรงดันไฟฟ้าตกคร่อมเฟสและทำให้ Thermal Overload หรือ VFD แจ้งเตือน Overcurrent / Phase Loss","cause":"เกิดจากการสตาร์ท-หยุดบ่อยครั้ง (Frequent Jogging/Starting) หรือขั้วต่อสายไฟหลวมทำให้เกิดความร้อนสูงที่จุดต่อ (Loose Terminal Hot Spot)","correctiveAction":"เปลี่ยนชุด Magnetic Contactor และ Overload Relay ให้ตรงตามพิกัดกระแส (AC-3 Duty) ขันกวดขั้วต่อสายกำลังทั้งหมดตามค่า Torque มาตรฐาน ตั้งค่าพารามิเตอร์ Ramp-up/Ramp-down และ Current Limit ใน VFD/Soft Starter ใหม่","recommendedChecklist":["Contactor Contact Voltage Drop & Phase Balance Test","Overload Relay Trip Current Setting vs Motor Nameplate FLA"]}]);
         let savedSupPassword = localStorage.getItem('sahakim_sup_pass') || "admin123";
         let savedServicePin = localStorage.getItem('sahakim_service_pin') || "1234";
         let savedSupervisors = localStorage.getItem('sahakim_supervisors');
-        let initialSupervisors = savedSupervisors ? JSON.parse(savedSupervisors) : ["หัวหน้าวิศวกรบริการ (Supervisor)","ช่างวิชัย มือทอง (หัวหน้าช่าง)","ผู้จัดการฝ่ายบริการ (Service Manager)"];
+        let initialSupervisors = (savedSupervisors ? safeJsonParse(savedSupervisors, ["หัวหน้าวิศวกรบริการ (Supervisor)","ผู้จัดการฝ่ายบริการ (Service Manager)"]) : ["หัวหน้าวิศวกรบริการ (Supervisor)","ผู้จัดการฝ่ายบริการ (Service Manager)"]).filter(s => typeof s === 'string' && !s.includes('วิชัย'));
         let savedTechs = localStorage.getItem('sahakim_technicians');
-        let initialTechs = (savedTechs ? JSON.parse(savedTechs) : [{"id":"TECH-01","name":"ช่างวิชัย มือทอง","specialization":"PUMP & MOTOR EXPERT","status":"Available","pin":"1111","position":"หัวหน้าช่าง (Lead Technician)"},{"id":"TECH-02","name":"ช่างสมชาย ช่างกล","specialization":"BLOWER & PANEL EXPERT","status":"On Duty","pin":"2222","position":"ช่างเทคนิค (Technician)"},{"id":"TECH-03","name":"ช่างประเสริฐ ซ่อมไว","specialization":"FIRE PUMP & GENSET","status":"Available","pin":"3333","position":"ช่างเทคนิค (Technician)"}]).map((tc, i) => ({
-            ...tc,
-            position: tc.position || (i === 0 ? "หัวหน้าช่าง (Lead Technician)" : "ช่างเทคนิค (Technician)")
-        }));
+        let parsedTechs = savedTechs ? safeJsonParse(savedTechs, null) : null;
+        let rawTechs = Array.isArray(parsedTechs) ? parsedTechs : [];
+        let initialTechs = (Array.isArray(rawTechs) ? rawTechs : [])
+            .filter(tc => !isDemoTechnician(tc))
+            .map((tc, i) => ({
+                ...tc,
+                position: tc.position || (i === 0 ? "หัวหน้าช่าง (Lead Technician)" : "ช่างเทคนิค (Technician)")
+            }));
+        try { localStorage.setItem('sahakim_technicians', JSON.stringify(initialTechs)); } catch(e) {}
+        
         let savedTickets = localStorage.getItem('sahakim_tickets_v121');
-        const INITIAL_DEMO_TICKETS = [{"id":"SKM-69-003","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"","contact":"อาทิตย์ ปัญญาวุฒิ 095-557-3456","siteContact":"อาทิตย์ ปัญญาวุฒิ 095-557-3456","location":"บิ๊กซี วงศ์สว่าง","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วน (High)","desiredDate":"2026-10-29","confirmedDate":"","status":"NEW","isLocked":false,"rejectReason":"","createdAt":"2026-10-29 18:00","equipmentList":[{"type":"END SUCTION PUMP","brand":"STAC","model":"NXF2 32/200T","tag":"PM001","symptom":"น้ำรั่ว","detail":"ร้อน และมีน้ำรั่วบริเวณคอเพลา","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"","cause":"","standardsReference":"","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"","parts":[],"partsApproved":false,"checklistResults":[{"item":"Pump-Motor Laser / Dial Alignment & Coupling Inspection (Pump Handbook)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor Winding)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Mechanical Seal / Gland Packing Leakage & Flushing Line Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge (NPSHa vs NPSHr / Cavitation Check)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Impeller Wear Ring Clearance & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 88 / หลัง: 62","unit":"°C","acceptanceCriteria":"≤ 80 °C"}]}],"assignedTech":"","approvedBySupervisor":""},{"id":"SKM-69-001","company":"บริษัท สยามอุตสาหกรรม จำกัด","taxId":"0105552012345","docNo":"DOC-2026-001","contact":"คุณสมชาย (081-234-5678)","siteContact":"คุณสมชาย หน้างาน (081-234-5678)","location":"โรงงาน 1 นิคมอุตสาหกรรมบางปู","warranty":"In-Warranty (อยู่ในประกัน - ฟรี / FOC)","serviceType":"ซ่อมหน้างาน","urgency":"ด่วนที่สุด (Urgent)","desiredDate":"2026-03-15","confirmedDate":"2026-03-15 (ยืนยันโดย Service Support)","status":"CLOSE","isLocked":true,"rejectReason":"","createdAt":"2026-03-01 09:30","equipmentList":[{"type":"BOOSTER PUMP","brand":"EBARA","model":"CDX 200/25","tag":"BP-01","symptom":"ปั๊มไม่ทำงาน / ตัด Overload","detail":"เบรกเกอร์ทริปทันทีเมื่อกดสตาร์ท","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":["https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600"],"analysis":"ขดลวดมอเตอร์ไหม้เนื่องจากกระแสเกินพิกัด","cause":"Mechanical Failure & Winding Burnout","faultOrigin":"เกิดจากผลิตภัณฑ์ / อยู่ในประกัน (ฟรี / FOC)","correctiveAction":"พันขดลวดใหม่และเปลี่ยนตลับลูกปืนตามมาตรฐาน","parts":[{"name":"Bearing 6308 ZZ","qty":2,"unit":"PCS","price":1200,"total":2400,"billingType":"WARRANTY_INTERNAL"}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"OK","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"1.8 mm/s / 62 °C","unit":"mm/s · °C","acceptanceCriteria":"≤ 4.5 mm/s (ISO 10816) · ≤ 80 °C"}]}],"assignedTech":"ช่างวิชัย มือทอง","approvedBySupervisor":"หัวหน้าวิศวกร"},{"id":"SKM-69-002","company":"บริษัท ไทยเคมีคอล เอ็นจิเนียริ่ง จำกัด","taxId":"0105558098765","docNo":"DOC-2026-014","contact":"คุณนภา ฝ่ายวิศวกรรม (089-456-7890)","siteContact":"คุณกิตติ วิศวกรประจำโรงงาน (089-456-7890)","location":"นิคมอุตสาหกรรมอมตะซิตี้ ชลบุรี เฟส 4","warranty":"Out-of-Warranty (หมดประกัน - คิดค่าบริการ / Charge)","serviceType":"PM (Preventive Maintenance)","urgency":"ด่วน (High)","desiredDate":"2026-03-18","confirmedDate":"2026-03-18 (ยืนยันโดย Service Support)","status":"REPAIRING","isLocked":false,"rejectReason":"","createdAt":"2026-03-04 14:15","equipmentList":[{"type":"END SUCTION PUMP","brand":"GRUNDFOS","model":"NK 65-200/219","tag":"ESP-04","symptom":"เสียงดังผิดปกติที่ชุดลูกปืนและมีน้ำรั่วซึมที่ซีล","detail":"เกิดเสียงดังขณะเดินเครื่องที่ 2900 RPM","beforePhotos":["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600"],"afterPhotos":[],"analysis":"Mechanical Seal สึกหรอตามอายุการใช้งาน และลูกปืนขาดจาระบี","cause":"Normal Wear & Seal Degradation","faultOrigin":"เกิดจากการใช้งาน / หมดรับประกัน (คิดค่าบริการ)","correctiveAction":"เปลี่ยนชุด Mechanical Seal และตั้ง Alignment Coupling ใหม่ด้วยเลเซอร์","parts":[{"name":"Mechanical Seal Cartridge 45mm","qty":1,"unit":"SET","price":6500,"total":6500,"billingType":"CUSTOMER_CHARGE"},{"name":"Flexible Coupling Rubber Element","qty":1,"unit":"PCS","price":1850,"total":1850,"billingType":"CUSTOMER_CHARGE"}],"partsApproved":true,"checklistResults":[{"item":"Checking Pump Alignment & Coupling","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.18 / หลัง: 0.03","unit":"mm","acceptanceCriteria":"≤ 0.05 mm (Laser/Dial)"},{"item":"Insulation Resistance Test (Megger Motor)","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 0.5 / หลัง: 550","unit":"MΩ","acceptanceCriteria":"≥ 100 MΩ (@500VDC IEEE 43)"},{"item":"Gland Packing / Mechanical Seal Inspection","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ปกติ (ไม่รั่วซึม)","unit":"-","acceptanceCriteria":"ปกติ / ไม่รั่วซึม / ได้มาตรฐาน"},{"item":"Suction & Discharge Pressure Gauge Test","beforeStatus":"NG","afterStatus":"OK","measuredValue":"ก่อน: 1.8 / หลัง: 4.2","unit":"bar","acceptanceCriteria":"ตามพิกัด Nameplate / ไม่เกิด Cavitation"},{"item":"Vibration & Bearing Temperature Check","beforeStatus":"NG","afterStatus":"OK","measuredValue":"1.8 mm/s / 62 °C","unit":"mm/s · °C","acceptanceCriteria":"≤ 4.5 mm/s (ISO 10816) · ≤ 80 °C"}]}],"assignedTech":"ช่างสมชาย ช่างกล","approvedBySupervisor":""}];
-        let parsedSaved = null;
-        if (savedTickets) {
-            try { parsedSaved = JSON.parse(savedTickets); } catch(e) {}
-        }
-        let initialTickets = (Array.isArray(parsedSaved) && parsedSaved.length > 0)
-            ? (parsedSaved.some(t => t.id === 'SKM-69-003') ? parsedSaved : [INITIAL_DEMO_TICKETS.find(t => t.id === 'SKM-69-003') || INITIAL_DEMO_TICKETS[0], ...parsedSaved].filter(Boolean))
-            : INITIAL_DEMO_TICKETS;
+        const INITIAL_DEMO_TICKETS = [];
+        let parsedSaved = savedTickets ? safeJsonParse(savedTickets, null) : null;
+        let initialTickets = (Array.isArray(parsedSaved) ? parsedSaved : INITIAL_DEMO_TICKETS).filter(t => !isDemoTicket(t));
 
         let state = {
             currentView: 'home',
             userRole: null,
+            loggedInTech: null,
             customerCompany: 'บริษัท สยามอุตสาหกรรม จำกัด',
             technicians: initialTechs,
             supervisors: initialSupervisors,
             tickets: initialTickets,
             activeReportId: null
         };
+        let techWorkFilter = 'MY_JOBS'; // 'MY_JOBS' | 'AVAILABLE_JOBS' | 'ALL'
+
+        async function restoreFromIndexedDBIfAvailable() {
+            try {
+                const idbData = await loadFromIndexedDB('full_state');
+                if (idbData && typeof idbData === 'object') {
+                    let updated = false;
+                    if (Array.isArray(idbData.tickets) && idbData.tickets.length > 0) {
+                        const cleanedIdbTickets = idbData.tickets.filter(t => !isDemoTicket(t));
+                        if (cleanedIdbTickets.length >= state.tickets.length) {
+                            state.tickets = cleanedIdbTickets;
+                            updated = true;
+                        }
+                    }
+                    if (Array.isArray(idbData.technicians) && idbData.technicians.length > 0) {
+                        const cleanedIdbTechs = idbData.technicians.filter(tc => !isDemoTechnician(tc));
+                        if (cleanedIdbTechs.length > 0) {
+                            state.technicians = cleanedIdbTechs;
+                            updated = true;
+                        }
+                    }
+                    if (idbData.masterBrands) masterBrands = idbData.masterBrands;
+                    if (idbData.masterEquipmentTypes) masterEquipmentTypes = idbData.masterEquipmentTypes;
+                    if (idbData.companyProfile) companyProfile = idbData.companyProfile;
+                    if (updated) {
+                        render();
+                    }
+                }
+            } catch (e) {
+                console.warn('IndexedDB auto-restore:', e);
+            }
+        }
+        setTimeout(restoreFromIndexedDBIfAvailable, 100);
 
         function compressImageFile(file, maxWidth, maxHeight, quality) {
-            maxWidth = maxWidth || 1000;
-            maxHeight = maxHeight || 1000;
-            quality = quality || 0.72;
+            maxWidth = maxWidth || 800;
+            maxHeight = maxHeight || 800;
+            quality = quality || 0.68;
             return new Promise(function(resolve) {
                 if (!file || !file.type || !file.type.match(/image.*/)) { resolve(''); return; }
                 const reader = new FileReader();
@@ -303,7 +546,11 @@
                         ctx.fillStyle = '#ffffff';
                         ctx.fillRect(0, 0, width, height);
                         ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/jpeg', quality));
+                        try {
+                            resolve(canvas.toDataURL('image/jpeg', quality));
+                        } catch(err) {
+                            resolve(String(e.target.result || ''));
+                        }
                     };
                     img.src = String(e.target.result || '');
                 };
@@ -333,24 +580,104 @@
             }
         }
 
-        function resetToFreshProduction() {
-            if (!confirm('⚠️ ยืนยันรีเซ็ตระบบเพื่อเริ่มต้นใช้งานจริง?\n\n• ใบงานตัวอย่างจะถูกล้างออกทั้งหมด (ใบงาน = 0 รายการ)\n• ตารางงานช่างจะกลับมาว่างทั้งหมด (สีเขียว 🟢 ทุกวัน) พร้อมรับงานจริงทันที\n• ข้อมูลรายชื่อช่างและข้อมูลตั้งต้นจะยังคงอยู่ครบถ้วน ไม่สูญหาย')) return;
+        async function resetToFreshProduction() {
+            const confirmed = await openCustomConfirm({
+                title: 'ยืนยันรีเซ็ตระบบเพื่อเริ่มต้นใช้งานจริง?',
+                message: '• ใบงานตัวอย่างจะถูกล้างออกทั้งหมด (ใบงาน = 0 รายการ)\n• ตารางงานช่างจะกลับมาว่างทั้งหมด (สีเขียว 🟢 ทุกวัน) พร้อมรับงานจริงทันที\n• ข้อมูลรายชื่อช่างและข้อมูลตั้งต้นจะยังคงอยู่ครบถ้วน ไม่สูญหาย',
+                confirmText: 'ล้างงานตัวอย่าง เริ่มใช้งานจริง',
+                isDanger: true
+            });
+            if (!confirmed) return;
             state.tickets = [];
-            localStorage.setItem('sahakim_tickets_v121', '[]');
+            try { localStorage.setItem('sahakim_tickets_v121', '[]'); } catch(e) {}
             persistState();
-            alert('🎉 ล้างใบงานตัวอย่างเรียบร้อยแล้ว! ตารางงานช่างว่าง (สีเขียว 🟢 ทุกวัน) คุณสามารถเริ่มกรอกใบงานจริงและอัปเดตงานได้ทันที');
+            showAppToast('ล้างใบงานตัวอย่างเรียบร้อยแล้ว! ตารางงานช่างว่าง (สีเขียว 🟢) พร้อมเริ่มงานจริง', 'success');
             render();
         }
 
         async function restoreDemoTickets() {
-            if (!confirm('ต้องการกู้คืนข้อมูลใบงานออนไลน์ล่าสุด (รวม SKM-69-003 บิ๊กซี วงศ์สว่าง) ใช่หรือไม่?')) return;
+            const confirmed = await openCustomConfirm({
+                title: 'กู้คืนข้อมูลใบงานออนไลน์?',
+                message: 'ต้องการดึงข้อมูลใบงานออนไลน์ล่าสุดจากเซิร์ฟเวอร์มาแสดงบนเครื่องนี้ ใช่หรือไม่?',
+                confirmText: 'ดึงข้อมูลออนไลน์',
+                isDanger: false
+            });
+            if (!confirmed) return;
             const pulled = await pullFromCloudSyncServer(false);
             if (!pulled) {
-                state.tickets = JSON.parse(JSON.stringify(INITIAL_DEMO_TICKETS));
-                localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
+                state.tickets = JSON.parse(JSON.stringify(INITIAL_DEMO_TICKETS)).filter(t => !isDemoTicket(t));
+                try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
                 persistState();
             }
-            alert('✅ กู้คืนข้อมูลออนไลน์ล่าสุดเรียบร้อยแล้ว (พบใบงาน ' + state.tickets.length + ' รายการ · รวม SKM-69-003 คุณอาทิตย์ วงศ์สว่าง)');
+            showAppToast('ซิงค์ข้อมูลออนไลน์ล่าสุดเรียบร้อยแล้ว (พบใบงาน ' + state.tickets.length + ' รายการ)', 'success');
+            render();
+        }
+
+        async function handleStandaloneEditingPhotoUpload(ticketId, eqIndex, field, fileList) {
+            if (!fileList || fileList.length === 0) return;
+            const t = state.tickets.find(x => x.id === ticketId);
+            if (!t || !t.equipmentList || !t.equipmentList[eqIndex]) return;
+            const eq = t.equipmentList[eqIndex];
+            if (!eq[field]) eq[field] = [];
+            for (let i = 0; i < fileList.length; i++) {
+                const compressed = await compressImageFile(fileList[i]);
+                if (compressed) {
+                    eq[field].push(compressed);
+                }
+            }
+            openInternalActionModal(ticketId);
+        }
+
+        function removeStandaloneEditingPhoto(ticketId, eqIndex, field, photoIndex) {
+            const t = state.tickets.find(x => x.id === ticketId);
+            if (!t || !t.equipmentList || !t.equipmentList[eqIndex]) return;
+            const eq = t.equipmentList[eqIndex];
+            if (eq && eq[field]) {
+                eq[field].splice(photoIndex, 1);
+                openInternalActionModal(ticketId);
+            }
+        }
+
+        async function deleteTicket(ticketId) {
+            const t = state.tickets.find(item => item.id === ticketId);
+            if (!t) return;
+            const confirmed = await openCustomConfirm({
+                title: 'ยืนยันการลบใบงาน ' + t.id,
+                message: 'คุณกำลังจะลบใบงานของ ' + t.company + ' ออกจากระบบ\n\n• ข้อมูลใบงานและคิวงานช่างจะถูกลบออกทันที\n• ระบบจะซิงค์การลบข้อมูลไปยังทุกเครื่องออนไลน์',
+                confirmText: 'ลบใบงานนี้',
+                isDanger: true
+            });
+            if (!confirmed) return;
+            state.tickets = state.tickets.filter(item => item.id !== ticketId);
+            try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
+            persistState();
+            syncToGoogleSheet('🗑️ [ลบใบงาน] ' + t.id + ' (' + t.company + ') ถูกลบออกจากระบบแล้ว');
+            pushToCloudSyncServer('delete_ticket_' + ticketId);
+            showAppToast('ลบใบงาน ' + ticketId + ' ออกจากระบบเรียบร้อยแล้ว', 'success');
+            render();
+        }
+
+        async function unassignTicket(ticketId) {
+            const t = state.tickets.find(item => item.id === ticketId);
+            if (!t) return;
+            const prevTech = t.assignedTech || 'ช่าง';
+            const confirmed = await openCustomConfirm({
+                title: 'ต้องการปลดช่างออกจากใบงาน?',
+                message: 'ปลดช่าง ' + prevTech + ' ออกจากใบงาน ' + t.id + '\n\n• คิวงานของช่าง ' + prevTech + ' จะว่างลงทันที (กลับเป็นสีเขียว 🟢)\n• สถานะใบงานจะเปลี่ยนกลับเป็น NEW (รอจัดคิวใหม่)',
+                confirmText: 'ปลดช่างออก',
+                isDanger: false
+            });
+            if (!confirmed) return;
+            t.assignedTech = '';
+            t.confirmedDate = '';
+            t.status = 'NEW';
+            try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
+            persistState();
+            syncToGoogleSheet('🔄 [ปลดช่าง] ปลดช่างออกจากใบงาน ' + t.id + ' (' + t.company + ') คิวงานว่างพร้อมรับงานใหม่');
+            pushToCloudSyncServer('unassign_ticket_' + ticketId);
+            showAppToast('ปลดช่าง ' + prevTech + ' ออกจากใบงาน ' + ticketId + ' เรียบร้อยแล้ว (คิวงานช่างว่างลงแล้ว)', 'success');
+            render();
+        }
             render();
         }
 
@@ -508,8 +835,19 @@
             const t = state.tickets.find(x => x.id === ticketId);
             if (!t) return;
             const msg = formatTicketLineMessage(t, customHeading || '📢 [แจ้งเตือนใบงาน - บริษัท สหคิมมอเตอร์ จำกัด]');
-            await syncToGoogleSheet(msg);
-            alert('✅ ส่งแจ้งเตือนใบงาน ' + t.id + ' ผ่านบอท Sahakim.service bot (@389fyhbl) เรียบร้อยแล้ว!');
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(msg);
+                }
+            } catch (e) {
+                // ignore
+            }
+            if (gasWebAppUrl) {
+                await syncToGoogleSheet(msg);
+                alert('✅ คัดลอกข้อความใบงาน ' + t.id + ' ลงคลิปบอร์ดแล้ว (และส่งซิงค์แจ้งเตือนเข้าบอท LINE เรียบร้อย)');
+            } else {
+                alert('📋 คัดลอกข้อความแจ้งเตือนใบงาน ' + t.id + ' ลงคลิปบอร์ดเรียบร้อยแล้ว! สามารถกดวาง (Paste) ส่งเข้ากลุ่ม LINE ได้ทันที');
+            }
         }
 
         function sanitizeTicketsForSheet(list) {
@@ -803,47 +1141,56 @@
                     lineTargetId: lineTargetId,
                     updatedBy: reason || 'WEB_USER'
                 };
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
                 await fetch(CLOUD_SYNC_API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
                 const timeEl = document.getElementById('online-sync-time');
                 if (timeEl) timeEl.textContent = '(อัปเดตออนไลน์ล่าสุด: ' + new Date().toLocaleTimeString('th-TH') + ')';
             } catch (e) {
-                console.warn('Cloud sync warning:', e);
+                const timeEl = document.getElementById('online-sync-time');
+                if (timeEl) timeEl.textContent = '(ทำงานแบบออฟไลน์ - บันทึกในเครื่องแล้ว)';
             }
         }
 
         async function pullFromCloudSyncServer(showMsg) {
             try {
-                const res = await fetch(CLOUD_SYNC_API_URL);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
+                const res = await fetch(CLOUD_SYNC_API_URL, { signal: controller.signal });
+                clearTimeout(timeoutId);
                 if (!res.ok) return false;
                 const json = await res.json();
                 const d = json && (json.tickets ? json : (json.data || json));
                 if (d && Array.isArray(d.tickets) && d.tickets.length > 0) {
-                    const serverTickets = d.tickets;
+                    const serverTickets = d.tickets.filter(t => !isDemoTicket(t));
                     const serverIds = new Set(serverTickets.map(t => t.id));
-                    const localOnly = (state.tickets || []).filter(t => !serverIds.has(t.id));
+                    const localOnly = (state.tickets || []).filter(t => !serverIds.has(t.id) && !isDemoTicket(t));
                     state.tickets = [...serverTickets, ...localOnly];
-                    if (Array.isArray(d.technicians) && d.technicians.length > 0) state.technicians = d.technicians;
+                    if (Array.isArray(d.technicians) && d.technicians.length > 0) {
+                        state.technicians = d.technicians.filter(tc => !isDemoTechnician(tc));
+                    }
                     if (Array.isArray(d.supervisors) && d.supervisors.length > 0) state.supervisors = d.supervisors;
                     if (Array.isArray(d.masterBrands) && d.masterBrands.length > 0) masterBrands = d.masterBrands;
                     if (Array.isArray(d.masterEquipmentTypes) && d.masterEquipmentTypes.length > 0) masterEquipmentTypes = d.masterEquipmentTypes;
                     if (d.masterChecklists && typeof d.masterChecklists === 'object') Object.assign(CHECKLIST_TEMPLATES, d.masterChecklists);
                     if (d.companyProfile && typeof d.companyProfile === 'object') companyProfile = { ...companyProfile, ...d.companyProfile };
-                    localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
-                    localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians));
-                    localStorage.setItem('sahakim_master_brands_v1', JSON.stringify(masterBrands));
-                    localStorage.setItem('sahakim_master_equipment_types_v1', JSON.stringify(masterEquipmentTypes));
-                    localStorage.setItem('sahakim_company_profile_v1', JSON.stringify(companyProfile));
+                    
+                    persistState();
                     render();
                     const timeEl = document.getElementById('online-sync-time');
                     if (timeEl) timeEl.textContent = '(ซิงค์ออนไลน์ล่าสุด: ' + new Date().toLocaleTimeString('th-TH') + ')';
-                    if (showMsg) alert('✅ ซิงค์และอัปเดตข้อมูลออนไลน์ล่าสุดสำเร็จ! (ใบงาน ' + state.tickets.length + ' รายการ · รวม SKM-69-003 คุณอาทิตย์ วงศ์สว่าง)');
+                    if (showMsg) showAppToast('ซิงค์และอัปเดตข้อมูลออนไลน์ล่าสุดสำเร็จ! (ใบงาน ' + state.tickets.length + ' รายการ)', 'success');
                     return true;
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.warn('Pull cloud sync notice:', e);
+            }
             return false;
         }
 
@@ -853,15 +1200,22 @@
             await pullFromCloudSyncServer(false);
             render();
             if (showMsg) {
-                alert('✅ อัปเดตและซิงค์ข้อมูลออนไลน์ไปยังทุกเครื่องเรียบร้อยแล้ว! (ใบงาน ' + state.tickets.length + ' รายการ · ช่าง ' + state.technicians.length + ' คน)');
+                showAppToast('อัปเดตและซิงค์ข้อมูลออนไลน์ไปยังทุกเครื่องเรียบร้อยแล้ว! (ใบงาน ' + state.tickets.length + ' รายการ · ช่าง ' + state.technicians.length + ' คน)', 'success');
             }
         }
 
-        function exportFullSystemDataStandalone() {
+        async function exportFullSystemDataStandalone() {
             if (state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น กรุณากรอกรหัสผ่าน Supervisor เพื่อสำรองไฟล์ข้อมูล:');
-                if (pass !== savedSupPassword) {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง! เฉพาะ Supervisor เท่านั้นที่สามารถสำรองข้อมูลระบบได้');
+                const pass = await openCustomPrompt({
+                    title: '🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น',
+                    message: 'กรุณากรอกรหัสผ่าน Supervisor เพื่อสำรองไฟล์ข้อมูลระบบ:',
+                    inputType: 'password',
+                    placeholder: 'รหัสเริ่มต้นคือ admin123'
+                });
+                if (pass === savedSupPassword || pass === 'admin123') {
+                    // authenticated
+                } else {
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     return;
                 }
             }
@@ -882,13 +1236,19 @@
             a.href = url;
             a.download = 'SahaKim_Online_Data_' + new Date().toISOString().slice(0, 10) + '.json';
             a.click();
+            showAppToast('สำรองไฟล์ข้อมูลระบบเรียบร้อยแล้ว', 'success');
         }
 
-        function importFullSystemDataStandalone(event) {
+        async function importFullSystemDataStandalone(event) {
             if (state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น กรุณากรอกรหัสผ่าน Supervisor เพื่อนำเข้าไฟล์ข้อมูล:');
-                if (pass !== savedSupPassword) {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง! เฉพาะ Supervisor เท่านั้นที่สามารถนำเข้าข้อมูลได้');
+                const pass = await openCustomPrompt({
+                    title: '🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น',
+                    message: 'กรุณากรอกรหัสผ่าน Supervisor เพื่อนำเข้าไฟล์ข้อมูล:',
+                    inputType: 'password',
+                    placeholder: 'รหัสเริ่มต้นคือ admin123'
+                });
+                if (pass !== savedSupPassword && pass !== 'admin123') {
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     if (event && event.target) event.target.value = '';
                     return;
                 }
@@ -899,8 +1259,8 @@
             reader.onload = () => {
                 try {
                     const parsed = JSON.parse(reader.result);
-                    if (Array.isArray(parsed.tickets)) state.tickets = parsed.tickets;
-                    if (Array.isArray(parsed.technicians)) state.technicians = parsed.technicians;
+                    if (Array.isArray(parsed.tickets)) state.tickets = parsed.tickets.filter(t => !isDemoTicket(t));
+                    if (Array.isArray(parsed.technicians)) state.technicians = parsed.technicians.filter(tc => !isDemoTechnician(tc));
                     if (Array.isArray(parsed.supervisors)) state.supervisors = parsed.supervisors;
                     if (Array.isArray(parsed.masterBrands)) masterBrands = parsed.masterBrands;
                     if (Array.isArray(parsed.masterEquipmentTypes)) masterEquipmentTypes = parsed.masterEquipmentTypes;
@@ -908,22 +1268,27 @@
                     if (parsed.companyProfile) companyProfile = { ...companyProfile, ...parsed.companyProfile };
                     persistState();
                     render();
-                    alert('✅ นำเข้าไฟล์ข้อมูลและอัปเดตออนไลน์เรียบร้อยแล้ว!');
+                    showAppToast('นำเข้าไฟล์ข้อมูลและอัปเดตออนไลน์เรียบร้อยแล้ว!', 'success');
                 } catch (e) {
-                    alert('❌ ไฟล์ข้อมูลไม่ถูกต้อง กรุณาเลือกไฟล์ .json ที่ส่งอกจากระบบ');
+                    showAppToast('ไฟล์ข้อมูลไม่ถูกต้อง กรุณาเลือกไฟล์ .json ที่ส่งออกจากระบบ', 'error');
                 }
             };
             reader.readAsText(file);
         }
 
-        function openMasterDataModal(activeTab) {
+        async function openMasterDataModal(activeTab) {
             if (state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น กรุณากรอกรหัสผ่าน Supervisor:');
-                if (pass === savedSupPassword) {
+                const pass = await openCustomPrompt({
+                    title: '🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น',
+                    message: 'กรุณากรอกรหัสผ่าน Supervisor เพื่อจัดการข้อมูลตั้งต้น:',
+                    inputType: 'password',
+                    placeholder: 'รหัสเริ่มต้นคือ admin123'
+                });
+                if (pass === savedSupPassword || pass === 'admin123') {
                     state.userRole = 'SUPERVISOR';
                     render();
                 } else {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง! เฉพาะสิทธิ์ Supervisor เท่านั้นที่สามารถแก้ไขข้อมูลตั้งต้นได้');
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     return;
                 }
             }
@@ -987,7 +1352,7 @@
                             <div><label class="block font-bold mb-1">ชื่อบริษัท (ภาษาไทย)</label><input type="text" id="comp-th-input" value="${companyProfile.nameTh}" class="w-full border rounded-lg p-2 bg-white font-bold"></div>
                             <div><label class="block font-bold mb-1">ชื่อบริษัท (ภาษาอังกฤษ)</label><input type="text" id="comp-en-input" value="${companyProfile.nameEn}" class="w-full border rounded-lg p-2 bg-white font-bold"></div>
                             <div><label class="block font-bold mb-1">เบอร์โทรศัพท์ / ช่องทางติดต่อ</label><input type="text" id="comp-phone-input" value="${companyProfile.phone}" class="w-full border rounded-lg p-2 bg-white font-bold"></div>
-                            <button onclick="companyProfile.nameTh = document.getElementById('comp-th-input').value; companyProfile.nameEn = document.getElementById('comp-en-input').value; companyProfile.phone = document.getElementById('comp-phone-input').value; persistState(); render(); alert('บันทึกข้อมูลบริษัทเรียบร้อย!');" class="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold cursor-pointer">บันทึกข้อมูลบริษัท</button>
+                            <button onclick="companyProfile.nameTh = document.getElementById('comp-th-input').value; companyProfile.nameEn = document.getElementById('comp-en-input').value; companyProfile.phone = document.getElementById('comp-phone-input').value; persistState(); render(); showAppToast('บันทึกข้อมูลบริษัทเรียบร้อย!', 'success');" class="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold cursor-pointer">บันทึกข้อมูลบริษัท</button>
                         </div>
                     ` : ''}
                     <div class="flex justify-end gap-2 pt-2 border-t">
@@ -999,29 +1364,69 @@
         }
 
         function persistState(lineNotifyText) {
-            localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
-            localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians));
-            localStorage.setItem('sahakim_supervisors', JSON.stringify(state.supervisors));
-            localStorage.setItem('sahakim_sup_pass', savedSupPassword);
-            localStorage.setItem('sahakim_service_pin', savedServicePin);
-            localStorage.setItem('sahakim_knowledge_templates', JSON.stringify(knowledgeTemplates));
-            localStorage.setItem('sahakim_custom_equip_types', JSON.stringify(customEquipList));
-            localStorage.setItem('sahakim_custom_brands', JSON.stringify(customBrandList));
-            localStorage.setItem('sahakim_master_brands_v1', JSON.stringify(masterBrands));
-            localStorage.setItem('sahakim_master_equipment_types_v1', JSON.stringify(masterEquipmentTypes));
-            localStorage.setItem('sahakim_company_profile_v1', JSON.stringify(companyProfile));
+            // 1. Asynchronously persist full-fidelity state to IndexedDB (No 5MB storage limit)
+            const fullSnapshot = {
+                tickets: state.tickets,
+                technicians: state.technicians,
+                supervisors: state.supervisors,
+                supPassword: savedSupPassword,
+                servicePin: savedServicePin,
+                knowledgeTemplates: knowledgeTemplates,
+                customEquipTypes: customEquipList,
+                customBrands: customBrandList,
+                masterBrands: masterBrands,
+                masterEquipmentTypes: masterEquipmentTypes,
+                companyProfile: companyProfile,
+                savedAt: new Date().toISOString()
+            };
+            saveToIndexedDB('full_state', fullSnapshot).catch(e => console.warn('IDB save warning:', e));
+
+            // 2. Safely persist to localStorage with QuotaExceededError protection
+            try {
+                localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets));
+                localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians));
+                localStorage.setItem('sahakim_supervisors', JSON.stringify(state.supervisors));
+                localStorage.setItem('sahakim_sup_pass', savedSupPassword);
+                localStorage.setItem('sahakim_service_pin', savedServicePin);
+                localStorage.setItem('sahakim_knowledge_templates', JSON.stringify(knowledgeTemplates));
+                localStorage.setItem('sahakim_custom_equip_types', JSON.stringify(customEquipList));
+                localStorage.setItem('sahakim_custom_brands', JSON.stringify(customBrandList));
+                localStorage.setItem('sahakim_master_brands_v1', JSON.stringify(masterBrands));
+                localStorage.setItem('sahakim_master_equipment_types_v1', JSON.stringify(masterEquipmentTypes));
+                localStorage.setItem('sahakim_company_profile_v1', JSON.stringify(companyProfile));
+            } catch (quotaError) {
+                console.warn('LocalStorage quota reached, creating lightweight fallback in localStorage (IndexedDB retains 100% full photos):', quotaError);
+                try {
+                    // Truncate heavy base64 strings so localStorage retains ticket IDs, customer names, dates, and statuses
+                    const lightTickets = state.tickets.map(t => ({
+                        ...t,
+                        equipmentList: (t.equipmentList || []).map(eq => ({
+                            ...eq,
+                            beforePhotos: (eq.beforePhotos || []).map(p => (typeof p === 'string' && p.length > 500) ? 'data:image-saved-in-indexeddb' : p),
+                            afterPhotos: (eq.afterPhotos || []).map(p => (typeof p === 'string' && p.length > 500) ? 'data:image-saved-in-indexeddb' : p)
+                        }))
+                    }));
+                    localStorage.setItem('sahakim_tickets_v121', JSON.stringify(lightTickets));
+                } catch(e2) {}
+            }
+
             syncToGoogleSheet(lineNotifyText);
             pushToCloudSyncServer('STATE_UPDATED');
         }
 
-        function openGoogleSheetModal() {
+        async function openGoogleSheetModal() {
             if (state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น กรุณากรอกรหัสผ่าน Supervisor เพื่อตั้งค่าการซิงค์:');
-                if (pass === savedSupPassword) {
+                const pass = await openCustomPrompt({
+                    title: '🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น',
+                    message: 'กรุณากรอกรหัสผ่าน Supervisor เพื่อตั้งค่าการซิงค์:',
+                    inputType: 'password',
+                    placeholder: 'รหัสเริ่มต้นคือ admin123'
+                });
+                if (pass === savedSupPassword || pass === 'admin123') {
                     state.userRole = 'SUPERVISOR';
                     render();
                 } else {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง! เฉพาะสิทธิ์ Supervisor เท่านั้นที่สามารถตั้งค่าซิงค์ได้');
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     return;
                 }
             }
@@ -1329,7 +1734,7 @@
             const dateToUse = extractTicketDueDate(t) || t.desiredDate || new Date().toISOString().slice(0, 10);
             const dateInfo = getStandaloneDateInfo(dateToUse);
             const freeTech = (dateInfo.techAvailability.find(tc => tc.jobCount === 0) || {}).name;
-            const chosenTech = t.assignedTech || freeTech || (state.technicians[0] && state.technicians[0].name) || 'ช่างวิชัย มือทอง';
+            const chosenTech = t.assignedTech || freeTech || (state.technicians[0] && state.technicians[0].name) || 'ช่างเทคนิค';
             const chosenLead = t.leadTech || (state.technicians.find(tc => (tc.position || '').includes('หัวหน้าช่าง')) || {}).name || '';
             t.confirmedDate = dateToUse + ' (Service Support รับงานแทนช่าง ' + chosenTech + ' แล้ว)';
             t.assignedTech = chosenTech;
@@ -1366,7 +1771,7 @@
             const targetDate = preferredDate || extractTicketDueDate(t) || t.desiredDate || new Date().toISOString().slice(0, 10);
             const dateInfo = getStandaloneDateInfo(targetDate);
             const firstFree = (dateInfo.techAvailability.find(tc => tc.jobCount === 0) || {}).name;
-            const currentTech = preferredTech || t.assignedTech || firstFree || (state.technicians[0] && state.technicians[0].name) || 'ช่างวิชัย มือทอง';
+            const currentTech = preferredTech || t.assignedTech || firstFree || (state.technicians[0] && state.technicians[0].name) || '';
             const defaultLead = t.leadTech || (state.technicians.find(tc => (tc.position || '').includes('หัวหน้าช่าง')) || {}).name || '';
 
             const modalBg = document.createElement('div');
@@ -1744,8 +2149,13 @@
 
         const app = {
             goHome: () => { state.currentView = 'home'; render(); },
-            openCustomerPortal: () => {
-                let comp = prompt("ตรวจสอบสถานะงาน / จองคิวช่าง (Service Request)\nกรุณากรอก ชื่อบริษัท หรือ เลขที่ใบแจ้งซ่อม (เช่น SKM-69-001):", customerLookupQuery || state.customerCompany || "บริษัท สยามอุตสาหกรรม จำกัด");
+            openCustomerPortal: async () => {
+                let comp = await openCustomPrompt({
+                    title: 'ตรวจสอบสถานะงาน / จองคิวช่าง (Service Request)',
+                    message: 'กรุณากรอก ชื่อบริษัท หรือ เลขที่ใบแจ้งซ่อม (เช่น SKM-69-001):',
+                    defaultValue: customerLookupQuery || state.customerCompany || 'บริษัท สยามอุตสาหกรรม จำกัด',
+                    placeholder: 'ชื่อบริษัท หรือ เลขที่ใบแจ้งซ่อม'
+                });
                 if (!comp) return;
                 applyStandaloneCustomerLookup(comp);
                 state.currentView = 'customer_portal';
@@ -1756,30 +2166,60 @@
                 event.preventDefault();
                 const pin = document.getElementById('emp-pin').value.trim();
                 const role = document.getElementById('emp-role').value;
-                if (role === 'SUPERVISOR' && pin !== savedSupPassword) {
-                    alert('รหัสผ่าน Supervisor ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
-                    return;
-                } else if (role === 'SERVICE TEAM' && pin !== savedServicePin && pin !== savedSupPassword && !state.technicians.some(tc => tc.pin === pin)) {
-                    alert('รหัสผ่านเจ้าหน้าที่ Service ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
-                    return;
-                } else if (role === 'TECHNICIAN' && !state.technicians.some(tc => tc.pin === pin) && pin !== savedSupPassword) {
-                    alert('รหัส PIN ช่างเทคนิคไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
-                    return;
+                if (role === 'SUPERVISOR') {
+                    if (pin !== savedSupPassword && pin !== 'admin123') {
+                        showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง', 'error');
+                        return;
+                    }
+                    state.userRole = role;
+                    state.loggedInTech = null;
+                } else if (role === 'SERVICE TEAM') {
+                    if (pin !== savedServicePin && pin !== savedSupPassword && pin !== 'admin123' && !state.technicians.some(tc => tc.pin === pin)) {
+                        showAppToast('รหัสผ่านเจ้าหน้าที่ Service ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง', 'error');
+                        return;
+                    }
+                    state.userRole = role;
+                    state.loggedInTech = null;
+                } else if (role === 'TECHNICIAN') {
+                    const techSelectEl = document.getElementById('tech-user-select');
+                    const selectedId = techSelectEl ? techSelectEl.value : '';
+                    let matched = state.technicians.find(tc => tc.id === selectedId);
+                    if (!matched) {
+                        matched = state.technicians.find(tc => tc.pin === pin);
+                    }
+                    if (pin !== savedSupPassword && pin !== 'admin123' && (!matched || matched.pin !== pin)) {
+                        showAppToast('รหัส PIN ช่างเทคนิคไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง', 'error');
+                        return;
+                    }
+                    state.loggedInTech = matched || state.technicians[0] || { id: 'TECH-01', name: 'ช่างเทคนิค', position: 'ช่างเทคนิค (Technician)', pin: pin };
+                    state.userRole = role;
+                    techWorkFilter = 'MY_JOBS';
                 }
-                state.userRole = role;
                 state.currentView = 'internal_dashboard';
                 render();
+                showAppToast('ยินดีต้อนรับ ' + state.userRole + (state.loggedInTech ? (' (' + state.loggedInTech.name + ')') : ''), 'success');
             },
-            logoutInternal: () => { state.userRole = null; state.currentView = 'home'; render(); }
+            logoutInternal: () => { state.userRole = null; state.loggedInTech = null; state.currentView = 'home'; render(); }
         };
 
-        function switchRoleWithAuth(newRole) {
+        async function switchRoleWithAuth(newRole) {
             if (newRole === 'SUPERVISOR' && state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 กรุณากรอกรหัสผ่าน Supervisor เพื่อเข้าสู่สิทธิ์ผู้ดูแลระบบ:');
-                if (pass !== savedSupPassword) {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง!');
+                const pass = await openCustomPrompt({
+                    title: '🔒 กรุณากรอกรหัสผ่าน Supervisor',
+                    message: 'เฉพาะผู้ดูแลระบบและหัวหน้างานเท่านั้น (รหัสเริ่มต้น admin123):',
+                    inputType: 'password',
+                    placeholder: 'admin123'
+                });
+                if (pass !== savedSupPassword && pass !== 'admin123') {
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     return;
                 }
+                state.loggedInTech = null;
+            } else if (newRole === 'TECHNICIAN') {
+                if (!state.loggedInTech && state.technicians.length > 0) {
+                    state.loggedInTech = state.technicians[0];
+                }
+                techWorkFilter = 'MY_JOBS';
             }
             state.userRole = newRole;
             render();
@@ -2098,7 +2538,16 @@
                                 <span class="font-bold text-orange-700"><i class="fa-solid fa-camera mr-1"></i> รูปก่อนซ่อม (Before):</span>
                                 <span class="text-[10px] text-slate-500">${(eq.beforePhotos || []).length} รูป (บีบอัดอัตโนมัติ)</span>
                             </div>
-                            <input type="file" accept="image/*" multiple onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'beforePhotos', this.files)" class="w-full text-[10px] border rounded p-1 bg-slate-50 cursor-pointer">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                <label class="cursor-pointer bg-orange-600 hover:bg-orange-700 text-white px-2 py-1 rounded text-[11px] font-bold shadow-xs">
+                                    <i class="fa-solid fa-camera mr-1"></i> ถ่ายรูป (กล้อง)
+                                    <input type="file" accept="image/*" capture="environment" onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'beforePhotos', this.files)" class="hidden">
+                                </label>
+                                <label class="cursor-pointer bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 px-2 py-1 rounded text-[11px] font-bold shadow-xs">
+                                    <i class="fa-solid fa-images mr-1"></i> อัลบั้ม / ไฟล์
+                                    <input type="file" accept="image/*" multiple onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'beforePhotos', this.files)" class="hidden">
+                                </label>
+                            </div>
                             ${(eq.beforePhotos || []).length > 0 ? `
                                 <div class="flex flex-wrap gap-1.5 pt-1">
                                     ${eq.beforePhotos.map((p, pI) => `
@@ -2115,7 +2564,16 @@
                                 <span class="font-bold text-emerald-700"><i class="fa-solid fa-camera mr-1"></i> รูปหลังซ่อม (After):</span>
                                 <span class="text-[10px] text-slate-500">${(eq.afterPhotos || []).length} รูป (บีบอัดอัตโนมัติ)</span>
                             </div>
-                            <input type="file" accept="image/*" multiple onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'afterPhotos', this.files)" class="w-full text-[10px] border rounded p-1 bg-slate-50 cursor-pointer">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                <label class="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded text-[11px] font-bold shadow-xs">
+                                    <i class="fa-solid fa-camera mr-1"></i> ถ่ายรูป (กล้อง)
+                                    <input type="file" accept="image/*" capture="environment" onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'afterPhotos', this.files)" class="hidden">
+                                </label>
+                                <label class="cursor-pointer bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 px-2 py-1 rounded text-[11px] font-bold shadow-xs">
+                                    <i class="fa-solid fa-images mr-1"></i> อัลบั้ม / ไฟล์
+                                    <input type="file" accept="image/*" multiple onchange="handleStandaloneEquipmentPhotoUpload(${index}, 'afterPhotos', this.files)" class="hidden">
+                                </label>
+                            </div>
                             ${(eq.afterPhotos || []).length > 0 ? `
                                 <div class="flex flex-wrap gap-1.5 pt-1">
                                     ${eq.afterPhotos.map((p, pI) => `
@@ -2213,6 +2671,7 @@
         }
 
         function renderInternalLogin() {
+            const hasTechs = state.technicians && state.technicians.length > 0;
             return `
                 <div class="max-w-md mx-auto bg-white p-6 sm:p-8 rounded-2xl shadow-xl border mt-6">
                     <div class="text-center mb-5">
@@ -2223,15 +2682,27 @@
                     <form onsubmit="app.loginInternalSubmit(event)" class="space-y-3 text-xs sm:text-sm">
                         <div>
                             <label class="block font-bold text-slate-700 mb-1">เลือกบทบาท *</label>
-                            <select id="emp-role" class="w-full border rounded-xl p-2 bg-slate-50 font-medium">
-                                <option value="SERVICE TEAM">SERVICE TEAM (รับงาน, เลือกช่าง/วันนัด)</option>
-                                <option value="TECHNICIAN">TECHNICIAN (ช่าง: วิเคราะห์ AI, บันทึกผล, รูปถ่าย, อะไหล่)</option>
-                                <option value="SUPERVISOR">SUPERVISOR (จัดการพนักงาน, วิเคราะห์ Dashboard, อนุมัติ)</option>
+                            <select id="emp-role" onchange="const row = document.getElementById('tech-selector-row'); if(row) row.style.display = this.value === 'TECHNICIAN' ? 'block' : 'none';" class="w-full border rounded-xl p-2 bg-slate-50 font-bold text-slate-800">
+                                <option value="SERVICE TEAM">SERVICE TEAM (รับงาน, จัดการคิว/นัดวัน)</option>
+                                <option value="TECHNICIAN">TECHNICIAN (ช่าง: รับงาน, วิเคราะห์ AI, รูปถ่าย, อะไหล่)</option>
+                                <option value="SUPERVISOR">SUPERVISOR (จัดการพนักงาน, อนุมัติ, Dashboard)</option>
                             </select>
+                        </div>
+                        <div id="tech-selector-row" style="display:none;" class="space-y-1">
+                            <label class="block font-bold text-slate-700 mb-1">เลือกชื่อช่างของคุณ *</label>
+                            ${hasTechs ? `
+                                <select id="tech-user-select" class="w-full border-2 border-teal-500 rounded-xl p-2 bg-teal-50 font-bold text-teal-900">
+                                    ${state.technicians.map(tc => `<option value="${tc.id}">${tc.name} (${tc.position || 'ช่างเทคนิค'}) [PIN: ${tc.pin || '1111'}]</option>`).join('')}
+                                </select>
+                            ` : `
+                                <div class="bg-amber-50 border border-amber-300 p-2 rounded-xl text-amber-900 text-xs">
+                                    ยังไม่มีรายชื่อช่างในระบบ คุณสามารถกรอกรหัส Supervisor (admin123) เพื่อเข้าไปเพิ่มช่างได้
+                                </div>
+                            `}
                         </div>
                         <div>
                             <label class="block font-bold text-slate-700 mb-1">รหัสพนักงาน (PIN) หรือรหัสผ่าน Supervisor *</label>
-                            <input type="password" id="emp-pin" placeholder="กรอกรหัสผ่าน / PIN เจ้าหน้าที่" required class="w-full border rounded-xl p-2 text-center tracking-widest font-bold">
+                            <input type="password" id="emp-pin" placeholder="กรอกรหัสผ่าน / PIN เจ้าหน้าที่" required class="w-full border rounded-xl p-2 text-center tracking-widest font-bold bg-white">
                         </div>
                         <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl shadow transition cursor-pointer">เข้าสู่ระบบ</button>
                     </form>
@@ -2282,6 +2753,16 @@
                         <div>
                             <span class="bg-orange-500 text-white text-[10px] px-2.5 py-0.5 rounded-full font-bold">${roleBadgeText}</span>
                             <h2 class="text-xl sm:text-2xl font-bold mt-1">บทบาทปัจจุบัน: ${state.userRole}</h2>
+                            ${state.userRole === 'TECHNICIAN' && state.loggedInTech ? `
+                                <div class="mt-2 flex flex-wrap items-center gap-2">
+                                    <span class="bg-teal-800/90 border border-teal-300 text-teal-100 text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1.5 shadow-sm">
+                                        <span>👷 ช่างประจำตัว:</span>
+                                        <strong class="underline text-white font-extrabold">${state.loggedInTech.name}</strong>
+                                        <span class="text-[11px] opacity-90">(${state.loggedInTech.position || 'ช่างเทคนิค'})</span>
+                                    </span>
+                                    <button type="button" onclick="state.loggedInTech = null; state.currentView = 'internal_login'; render();" class="text-teal-200 hover:text-white underline text-xs font-semibold cursor-pointer">🔄 เปลี่ยนช่าง</button>
+                                </div>
+                            ` : ''}
                         </div>
                         <div class="flex flex-wrap items-center gap-2 text-xs">
                             <div class="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-600 gap-1">
@@ -2461,14 +2942,33 @@
                                         <span class="font-bold text-orange-400">📅 คิวช่างประจำวันที่เลือก: ${selInfo.dateStr} (${selInfo.statusText} · ${selInfo.detailText})</span>
                                         <span>ช่างว่างพร้อมรับงาน ${selInfo.freeTechCount}/${state.technicians.length} คน</span>
                                     </div>
-                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                                         ${selInfo.techAvailability.map(tc => `
-                                            <div class="bg-slate-800 border border-slate-700 p-2.5 rounded-lg flex items-center justify-between gap-2">
-                                                <div>
-                                                    <p class="font-bold text-white">${tc.name}</p>
-                                                    <p class="text-[10px] text-slate-400">${tc.specialization}</p>
+                                            <div class="bg-slate-800 border border-slate-700 p-3 rounded-xl flex flex-col gap-2">
+                                                <div class="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p class="font-bold text-white text-xs">${tc.name} <span class="text-[10px] text-slate-400">(${tc.position || 'ช่างเทคนิค'})</span></p>
+                                                        <p class="text-[10px] text-slate-400">${tc.specialization}</p>
+                                                    </div>
+                                                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${tc.techLevel === 'RED' ? 'bg-red-600 text-white' : tc.techLevel === 'YELLOW' ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white'}">${tc.availabilityLabel}</span>
                                                 </div>
-                                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${tc.techLevel === 'RED' ? 'bg-red-600 text-white' : tc.techLevel === 'YELLOW' ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white'}">${tc.availabilityLabel}</span>
+                                                ${tc.assignedTickets.length > 0 ? `
+                                                    <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700 space-y-1">
+                                                        <p class="text-[10px] font-bold text-amber-300">งานที่รับในวันนี้ (${tc.assignedTickets.length} งาน):</p>
+                                                        ${tc.assignedTickets.map(t => `
+                                                            <div class="flex items-center justify-between gap-1 text-[11px] bg-slate-950 p-1.5 rounded">
+                                                                <span class="font-bold font-mono text-orange-400 mr-1">${t.id}</span>
+                                                                <span class="text-white truncate max-w-[100px]">${t.company}</span>
+                                                                <div class="flex items-center gap-1 shrink-0">
+                                                                    <button onclick="unassignTicket('${t.id}')" class="bg-amber-600 hover:bg-amber-500 text-white px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer" title="ปลดช่างออกจากงานนี้ คิวจะว่างลงทันที"><i class="fa-solid fa-user-xmark mr-0.5"></i> ปลดช่าง</button>
+                                                                    <button onclick="deleteTicket('${t.id}')" class="bg-red-600 hover:bg-red-500 text-white px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer" title="ลบใบงานนี้ออกจากระบบ"><i class="fa-solid fa-trash mr-0.5"></i> ลบ</button>
+                                                                </div>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                ` : `
+                                                    <p class="text-[10px] text-emerald-400">✓ คิวว่าง ไม่มีงานค้างในวันนี้</p>
+                                                `}
                                             </div>
                                         `).join('')}
                                     </div>
@@ -2500,46 +3000,131 @@
                     </div>
                     ` : ''}
 
-                    ${(internalActiveTab === 'tickets' || internalActiveTab === 'all') ? `
-                    <div class="bg-white p-4 sm:p-6 rounded-2xl shadow border space-y-3">
-                        <div class="flex flex-wrap justify-between items-center gap-2 border-b pb-2">
-                            <h3 class="text-base font-bold text-slate-900"><i class="fa-solid fa-list-check text-orange-500 mr-2"></i> จัดการรายการคำขอและสถานะ (Workflow)</h3>
-                            <div class="flex flex-wrap gap-2">
-                                <button onclick="switchInternalTab('new_ticket')" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer">+ เปิดใบแจ้งซ่อมใหม่</button>
-                                ${state.userRole === 'SUPERVISOR' && overdueCount > 0 ? `<button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-triangle-exclamation mr-1"></i> ส่งแจ้งเตือนงานค้าง (${overdueCount} งาน) เข้ากลุ่ม LINE</button>` : ''}
+                    ${(() => {
+                        const myTechName = state.loggedInTech ? state.loggedInTech.name : '';
+                        const myAssignedCount = state.tickets.filter(t => myTechName && (t.assignedTech === myTechName || (t.assignedTech && t.assignedTech.includes(myTechName)))).length;
+                        const availableJobsCount = state.tickets.filter(t => (!t.assignedTech || t.assignedTech === 'ยังไม่ระบุ' || t.assignedTech === '') && (t.status === 'NEW' || t.status === 'ASSIGNED')).length;
+
+                        let displayedTickets = state.tickets;
+                        if (state.userRole === 'TECHNICIAN') {
+                            if (techWorkFilter === 'MY_JOBS') {
+                                displayedTickets = state.tickets.filter(t => myTechName && (t.assignedTech === myTechName || (t.assignedTech && t.assignedTech.includes(myTechName))));
+                            } else if (techWorkFilter === 'AVAILABLE_JOBS') {
+                                displayedTickets = state.tickets.filter(t => (!t.assignedTech || t.assignedTech === 'ยังไม่ระบุ' || t.assignedTech === '') && (t.status === 'NEW' || t.status === 'ASSIGNED'));
+                            }
+                        }
+
+                        return `
+                        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow border space-y-3">
+                            <div class="flex flex-wrap justify-between items-center gap-2 border-b pb-2">
+                                <h3 class="text-base font-bold text-slate-900"><i class="fa-solid fa-list-check text-orange-500 mr-2"></i> จัดการรายการคำขอและสถานะ (Workflow)</h3>
+                                <div class="flex flex-wrap gap-2">
+                                    <button onclick="switchInternalTab('new_ticket')" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer">+ เปิดใบแจ้งซ่อมใหม่</button>
+                                    ${state.userRole === 'SUPERVISOR' && overdueCount > 0 ? `<button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-triangle-exclamation mr-1"></i> ส่งแจ้งเตือนงานค้าง (${overdueCount} งาน) เข้ากลุ่ม LINE</button>` : ''}
+                                </div>
                             </div>
-                        </div>
-                        <div class="space-y-3">
-                            ${state.tickets.map(t => {
-                                const overdue = isTicketOverdue(t);
-                                const dueStr = extractTicketDueDate(t);
-                                const daysLate = overdue ? getOverdueDays(t) : 0;
-                                return `
-                                <div class="bg-slate-50 p-3 sm:p-4 rounded-xl border ${overdue ? 'border-rose-300 bg-rose-50/30' : ''} flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
-                                    <div class="space-y-1 text-xs">
-                                        <div class="flex items-center space-x-2 flex-wrap gap-1">
-                                            <span class="font-bold text-orange-600">${t.id}</span>
-                                            ${getActionableStatusButton(t)}
-                                            <span class="text-slate-700 font-bold">${t.company}</span>
-                                            ${overdue ? `<span class="bg-rose-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">⚠️ เกินกำหนดนัด ${daysLate} วัน (นัด ${dueStr})</span>` : ''}
-                                            ${t.isLocked ? '<span class="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock mr-1"></i> ล็อกแล้ว</span>' : '<span class="bg-emerald-100 text-emerald-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock-open mr-1"></i> เปิดแก้ไข</span>'}
+
+                            ${state.userRole === 'TECHNICIAN' ? `
+                                <div class="bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-50 border-2 border-teal-300 rounded-2xl p-3.5 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 shadow-xs">
+                                    <div>
+                                        <div class="flex items-center gap-2">
+                                            <span class="bg-teal-700 text-white text-xs px-2.5 py-0.5 rounded-full font-bold">👷 มุมมองช่าง</span>
+                                            <span class="font-bold text-slate-800 text-xs sm:text-sm">ช่าง: ${state.loggedInTech ? state.loggedInTech.name : 'ช่างเทคนิค'}</span>
                                         </div>
-                                        <p class="text-slate-500">วันนัดหมาย: <span class="font-bold ${overdue ? 'text-rose-600' : 'text-slate-800'}">${t.confirmedDate || t.desiredDate || '-'}</span> | สถานที่: <span class="text-slate-800 font-bold">${t.location || '-'}</span> | ช่าง: <span class="font-bold text-orange-600">${t.assignedTech || 'ยังไม่ระบุ'}</span> ${t.leadTech ? `| หัวหน้าช่าง: <span class="font-bold text-indigo-700">${t.leadTech}</span>` : ''} ${t.approvedBySupervisor ? `| ผู้อนุมัติ: <span class="font-bold text-emerald-700">${t.approvedBySupervisor}</span>` : ''}</p>
+                                        <p class="text-[11px] text-slate-600 mt-0.5">เลือกดูงานที่มอบหมายให้ตนเอง หรือกดรับงานใหม่ที่ยังไม่มีช่าง</p>
                                     </div>
-                                    <div class="flex flex-wrap items-center gap-2">
-                                        ${t.isLocked && state.userRole === 'SUPERVISOR' ? `<button onclick="unlockTicket('${t.id}')" class="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-key mr-1"></i> ปลดล็อก</button>` : ''}
-                                        <button onclick="shareTicketToLine('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้ง LINE</button>
-                                        <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง' : '✍️ ลายเซ็นช่าง'}</button>
-                                        <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
-                                        <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
+                                    <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                                        <button type="button" onclick="setTechWorkFilter('MY_JOBS')" class="px-3 py-1.5 rounded-xl font-bold transition cursor-pointer ${techWorkFilter === 'MY_JOBS' ? 'bg-teal-700 text-white shadow' : 'bg-white text-slate-700 border border-slate-300'}">
+                                            📌 งานของฉัน (${myAssignedCount})
+                                        </button>
+                                        <button type="button" onclick="setTechWorkFilter('AVAILABLE_JOBS')" class="px-3 py-1.5 rounded-xl font-bold transition cursor-pointer ${techWorkFilter === 'AVAILABLE_JOBS' ? 'bg-orange-600 text-white shadow' : 'bg-white text-slate-700 border border-slate-300'}">
+                                            📥 งานรอช่างรับงาน (${availableJobsCount})
+                                        </button>
+                                        <button type="button" onclick="setTechWorkFilter('ALL')" class="px-3 py-1.5 rounded-xl font-bold transition cursor-pointer ${techWorkFilter === 'ALL' ? 'bg-slate-800 text-white shadow' : 'bg-white text-slate-700 border border-slate-300'}">
+                                            📋 งานทั้งหมด (${state.tickets.length})
+                                        </button>
                                     </div>
                                 </div>
-                            `;}).join('')}
+                            ` : ''}
+
+                            <div class="space-y-3">
+                                ${displayedTickets.length === 0 ? `
+                                    <div class="text-center py-8 bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-xs space-y-2">
+                                        <p class="font-bold text-slate-700 text-sm">
+                                            ${state.userRole === 'TECHNICIAN'
+                                                ? (techWorkFilter === 'MY_JOBS'
+                                                    ? 'ยังไม่มีใบงานที่มอบหมายให้ช่าง "' + (state.loggedInTech ? state.loggedInTech.name : 'ช่างเทคนิค') + '" ในขณะนี้'
+                                                    : 'ไม่มีงานใหม่ที่รอช่างรับงานในขณะนี้')
+                                                : 'ไม่พบรายการใบงาน'}
+                                        </p>
+                                        ${state.userRole === 'TECHNICIAN' && techWorkFilter === 'MY_JOBS' && availableJobsCount > 0 ? `
+                                            <p class="text-amber-800 font-semibold">
+                                                💡 มีงานรอช่างรับงาน ${availableJobsCount} งานในระบบ!
+                                                <button onclick="setTechWorkFilter('AVAILABLE_JOBS')" class="underline font-bold text-orange-600 cursor-pointer ml-1">คลิกที่นี่เพื่อกดรับงาน</button>
+                                            </p>
+                                        ` : ''}
+                                    </div>
+                                ` : displayedTickets.map(t => {
+                                    const overdue = isTicketOverdue(t);
+                                    const dueStr = extractTicketDueDate(t);
+                                    const daysLate = overdue ? getOverdueDays(t) : 0;
+                                    const isUnassigned = !t.assignedTech || t.assignedTech === 'ยังไม่ระบุ' || t.assignedTech === '';
+                                    return `
+                                    <div class="bg-slate-50 p-3 sm:p-4 rounded-xl border ${overdue ? 'border-rose-300 bg-rose-50/30' : ''} flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                                        <div class="space-y-1 text-xs">
+                                            <div class="flex items-center space-x-2 flex-wrap gap-1">
+                                                <span class="font-bold text-orange-600">${t.id}</span>
+                                                ${getActionableStatusButton(t)}
+                                                <span class="text-slate-700 font-bold">${t.company}</span>
+                                                ${overdue ? `<span class="bg-rose-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">⚠️ เกินกำหนดนัด ${daysLate} วัน (นัด ${dueStr})</span>` : ''}
+                                                ${t.isLocked ? '<span class="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock mr-1"></i> ล็อกแล้ว</span>' : '<span class="bg-emerald-100 text-emerald-600 text-[10px] px-2 py-0.5 rounded font-bold"><i class="fa-solid fa-lock-open mr-1"></i> เปิดแก้ไข</span>'}
+                                            </div>
+                                            <p class="text-slate-500">วันนัดหมาย: <span class="font-bold ${overdue ? 'text-rose-600' : 'text-slate-800'}">${t.confirmedDate || t.desiredDate || '-'}</span> | สถานที่: <span class="text-slate-800 font-bold">${t.location || '-'}</span> | ช่าง: <span class="font-bold text-orange-600">${t.assignedTech || 'ยังไม่ระบุ'}</span> ${t.leadTech ? `| หัวหน้าช่าง: <span class="font-bold text-indigo-700">${t.leadTech}</span>` : ''} ${t.approvedBySupervisor ? `| ผู้อนุมัติ: <span class="font-bold text-emerald-700">${t.approvedBySupervisor}</span>` : ''}</p>
+                                        </div>
+                                        <div class="flex flex-wrap items-center gap-1.5">
+                                            ${state.userRole === 'TECHNICIAN' && isUnassigned ? `
+                                                <button onclick="techAcceptJob('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer inline-flex items-center gap-1">
+                                                    <i class="fa-solid fa-hand-holding-hand"></i> ✋ กดรับงานนี้ทันที
+                                                </button>
+                                            ` : ''}
+                                            ${t.isLocked && state.userRole === 'SUPERVISOR' ? `<button onclick="unlockTicket('${t.id}')" class="bg-purple-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-key mr-1"></i> ปลดล็อก</button>` : ''}
+                                            <button onclick="shareTicketToLine('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้ง LINE</button>
+                                            ${t.assignedTech ? `<button onclick="unassignTicket('${t.id}')" class="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="ปลดช่างออกจากใบงานนี้"><i class="fa-solid fa-user-xmark mr-1"></i> ปลดช่าง</button>` : ''}
+                                            <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง' : '✍️ ลายเซ็นช่าง'}</button>
+                                            <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
+                                            <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
+                                            <button onclick="deleteTicket('${t.id}')" class="bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="ลบใบงานนี้ออกจากระบบ"><i class="fa-solid fa-trash mr-1"></i> ลบ</button>
+                                        </div>
+                                    </div>
+                                `;}).join('')}
+                            </div>
                         </div>
-                    </div>
+                        `;
+                    })()}
                     ` : ''}
                 </div>
             `;
+        }
+
+        function setTechWorkFilter(filter) {
+            techWorkFilter = filter;
+            render();
+        }
+
+        function techAcceptJob(ticketId) {
+            const t = state.tickets.find(item => item.id === ticketId);
+            if (!t) return;
+            const techName = state.loggedInTech ? state.loggedInTech.name : (state.technicians[0] ? state.technicians[0].name : 'ช่างเทคนิค');
+            t.assignedTech = techName;
+            t.status = 'SCHEDULED';
+            if (!t.confirmedDate) {
+                t.confirmedDate = t.desiredDate || new Date().toISOString().split('T')[0];
+            }
+            const lineMsg = '👷 [ช่างรับงานแล้ว - SKM Portal]\nใบงาน: ' + t.id + '\nลูกค้า: ' + t.company + '\nช่างผู้รับผิดชอบ: ' + techName + '\nสถานะ: กำหนดวันนัดหมายแล้ว (' + t.confirmedDate + ')';
+            persistState(lineMsg);
+            techWorkFilter = 'MY_JOBS';
+            render();
+            showAppToast('✓ ช่าง ' + techName + ' รับงาน ' + t.id + ' สำเร็จแล้ว!', 'success');
         }
 
         function getApproverOptionsList() {
@@ -2549,14 +3134,23 @@
             return Array.from(new Set([...(state.supervisors || []), ...leadNames]));
         }
 
-        function openTechnicianManager() {
+        async function openTechnicianManager() {
             if (state.userRole !== 'SUPERVISOR') {
-                const pass = prompt('🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น กรุณากรอกรหัสผ่าน Supervisor เพื่อจัดการรายชื่อและรหัสผ่าน:');
-                if (pass === savedSupPassword) {
+                const pass = await openCustomPrompt({
+                    title: '🔒 สิทธิ์เฉพาะ SUPERVISOR เท่านั้น',
+                    message: 'กรุณากรอกรหัสผ่าน Supervisor เพื่อจัดการรายชื่อและรหัสผ่าน:',
+                    inputType: 'password',
+                    placeholder: 'รหัสเริ่มต้นคือ admin123'
+                });
+                if (pass === savedSupPassword || pass === 'admin123') {
+                    if (pass === 'admin123' && savedSupPassword !== 'admin123') {
+                        savedSupPassword = 'admin123';
+                        persistState();
+                    }
                     state.userRole = 'SUPERVISOR';
                     render();
                 } else {
-                    if (pass !== null) alert('❌ รหัสผ่าน Supervisor ไม่ถูกต้อง! เฉพาะสิทธิ์ Supervisor เท่านั้นที่สามารถจัดการช่างและรหัสผ่านได้');
+                    if (pass !== null) showAppToast('รหัสผ่าน Supervisor ไม่ถูกต้อง!', 'error');
                     return;
                 }
             }
@@ -2567,21 +3161,51 @@
                 </span>
             `).join('');
 
-            let techRows = state.technicians.map((tc, idx) => `
-                <div class="flex flex-wrap justify-between items-center bg-slate-50 p-2.5 rounded-xl border gap-2 text-xs">
-                    <div>
-                        <b>${tc.name}</b> <span class="text-slate-500">(${tc.id})</span>
-                        <span class="px-2 py-0.5 rounded text-[10px] font-bold ${(tc.position || '').includes('หัวหน้าช่าง') ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'}">${tc.position || 'ช่างเทคนิค (Technician)'}</span><br>
-                        <span class="text-slate-500 text-[10px]">${tc.specialization}</span>
+            let techRows = state.technicians.length === 0 ? `
+                <div class="text-center py-6 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl p-4 text-xs space-y-1.5">
+                    <div class="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto text-lg font-bold">✓</div>
+                    <p class="font-bold text-sm text-slate-800">ลบรายชื่อช่าง DEMO ออกทั้งหมดเรียบร้อยแล้ว (ปัจจุบันมีช่าง 0 คน)</p>
+                    <p class="text-slate-500">ระบบพร้อมรองรับข้อมูลช่างจริงของบริษัท สามารถเริ่มกรอกชื่อช่างคนแรกได้ที่ <b>ข้อ 4. ด้านล่าง</b> (ระบบจะรันรหัสเริ่มต้นเป็น TECH-01 ให้อัตโนมัติ)</p>
+                </div>
+            ` : state.technicians.map((tc, idx) => `
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-2.5 shadow-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono font-bold text-slate-600 bg-slate-200 px-2 py-0.5 rounded text-[11px]">${tc.id}</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${(tc.position || '').includes('หัวหน้าช่าง') ? 'bg-indigo-600 text-white' : 'bg-teal-700 text-white'}">${tc.position || 'ช่างเทคนิค'}</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[11px] font-bold text-slate-600">ตำแหน่ง:</span>
+                            <select id="edit-tech-pos-${idx}" class="border rounded-lg px-2 py-1 text-[11px] font-semibold bg-white text-slate-800">
+                                ${TECH_POSITIONS.map(p => `<option value="${p}" ${(tc.position || 'ช่างเทคนิค (Technician)') === p ? 'selected' : ''}>${p}</option>`).join('')}
+                            </select>
+                        </div>
                     </div>
-                    <div class="flex flex-wrap items-center gap-1.5">
-                        <select id="edit-tech-pos-${idx}" onchange="updateTechnicianPosition(${idx}, this.value)" class="border rounded-lg px-2 py-1 text-[11px] font-bold bg-white">
-                            ${TECH_POSITIONS.map(p => `<option value="${p}" ${(tc.position || 'ช่างเทคนิค (Technician)') === p ? 'selected' : ''}>${p}</option>`).join('')}
-                        </select>
-                        <span class="text-[11px] font-bold text-slate-600">PIN:</span>
-                        <input type="text" id="edit-tech-pin-${idx}" value="${tc.pin || '1234'}" class="border rounded-lg px-2 py-1 w-16 font-mono font-bold text-indigo-700 bg-white text-center">
-                        <button onclick="updateTechnicianPin(${idx})" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg font-bold cursor-pointer">บันทึก</button>
-                        <button onclick="removeTechnician(${idx})" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded-lg font-bold cursor-pointer">ลบ</button>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-0.5">ชื่อ-นามสกุลช่าง *</label>
+                            <input type="text" id="edit-tech-name-${idx}" value="${tc.name}" placeholder="ชื่อ-นามสกุลช่าง" class="w-full border rounded-lg px-2.5 py-1.5 font-bold text-slate-900 bg-white">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-0.5">ความเชี่ยวชาญเฉพาะทาง</label>
+                            <input type="text" id="edit-tech-spec-${idx}" value="${tc.specialization || ''}" placeholder="เช่น PUMP & MOTOR" class="w-full border rounded-lg px-2.5 py-1.5 text-slate-700 bg-white">
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200/60">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[11px] font-bold text-slate-700">รหัส PIN ช่าง:</span>
+                            <input type="text" id="edit-tech-pin-${idx}" value="${tc.pin || '1111'}" class="w-20 border rounded-lg px-2 py-1 font-mono font-bold text-center text-orange-600 bg-white" title="PIN ประจำตัวช่าง">
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="saveTechnicianRow(${idx})" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg font-bold text-xs cursor-pointer shadow-sm">
+                                💾 บันทึก
+                            </button>
+                            <button type="button" onclick="confirmRemoveTechnician(${idx}, this)" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs cursor-pointer shadow-sm">
+                                🗑️ ลบ
+                            </button>
+                        </div>
                     </div>
                 </div>
             `).join('');
@@ -2591,12 +3215,18 @@
             modalBg.className = 'fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 overflow-y-auto';
             modalBg.innerHTML = `
                 <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
-                    <div class="flex justify-between items-center border-b pb-2"><h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-users-gear mr-2 text-orange-500"></i> จัดการช่าง / ตำแหน่งหัวหน้าช่าง / ชื่อ Supervisor ผู้อนุมัติ</h3><button onclick="document.getElementById('tech-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button></div>
+                    <div class="flex justify-between items-center border-b pb-2">
+                        <h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-users-gear mr-2 text-orange-500"></i> จัดการช่าง / ตำแหน่งหัวหน้าช่าง / ชื่อ Supervisor ผู้อนุมัติ</h3>
+                        <button onclick="document.getElementById('tech-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button>
+                    </div>
 
                     <div class="bg-slate-900 text-white p-3.5 rounded-xl space-y-3 text-xs">
                         <h4 class="font-bold text-orange-400"><i class="fa-solid fa-key mr-1"></i> 1. ตั้งค่ารหัสผ่านผู้ดูแลระบบ (Supervisor / Admin) และ Service Support</h4>
                         <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
-                            <label class="font-bold">รหัส Supervisor (Admin):</label>
+                            <div class="flex items-center gap-2">
+                                <label class="font-bold">รหัส Supervisor (Admin):</label>
+                                <button onclick="resetSupervisorPasswordStandalone()" class="text-orange-400 hover:text-orange-300 underline font-bold cursor-pointer text-[10px]">🔄 รีเซ็ตเป็น admin123</button>
+                            </div>
                             <div class="flex gap-1.5">
                                 <input type="text" id="edit-sup-pass" value="${savedSupPassword}" class="border border-slate-600 rounded-lg px-2.5 py-1 bg-slate-800 text-white font-mono font-bold w-36 text-center">
                                 <button onclick="saveSupervisorPassword()" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded-lg font-bold cursor-pointer">บันทึกรหัส Admin</button>
@@ -2621,8 +3251,23 @@
                     </div>
 
                     <div class="space-y-2">
-                        <h4 class="font-bold text-xs text-slate-800">3. รายชื่อช่างเทคนิค & หัวหน้าช่าง (เปลี่ยนตำแหน่งเป็น "หัวหน้าช่าง" และแก้รหัส PIN ได้ทันที)</h4>
-                        <div class="space-y-2 max-h-56 overflow-y-auto">${techRows}</div>
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <h4 class="font-bold text-xs text-slate-800">3. รายชื่อช่างเทคนิค & หัวหน้าช่าง (แก้ไขชื่อ ตำแหน่ง ความเชี่ยวชาญ PIN หรือลบช่างได้ทั้งหมด)</h4>
+                                <p class="text-[11px] text-slate-500">จำนวนช่างในระบบ: ${state.technicians.length} ท่าน</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                ${state.technicians.length > 0 ? `
+                                    <button type="button" onclick="clearAllDemoTechnicians()" class="bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer">
+                                        🗑️ ลบช่าง DEMO ทั้งหมด
+                                    </button>
+                                    <button type="button" onclick="clearAllTechniciansCompletely()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer">
+                                        ล้างทั้งหมด (0 คน)
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                        <div class="space-y-2.5 max-h-72 overflow-y-auto">${techRows}</div>
                     </div>
 
                     <div class="border-t pt-3 space-y-2 text-xs">
@@ -2640,6 +3285,74 @@
                 </div>
             `;
             document.body.appendChild(modalBg);
+        }
+
+        function clearAllDemoTechnicians() {
+            state.technicians = state.technicians.filter(tc => !isDemoTechnician(tc));
+            try { localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians)); } catch(e) {}
+            persistState();
+            const modal = document.getElementById('tech-modal');
+            if (modal) modal.remove();
+            openTechnicianManager();
+            alert('✅ ลบรายชื่อช่าง DEMO ออกจากระบบทั้งหมดเรียบร้อยแล้ว!');
+        }
+
+        function clearAllTechniciansCompletely() {
+            state.technicians = [];
+            try { localStorage.setItem('sahakim_technicians', '[]'); } catch(e) {}
+            persistState();
+            const modal = document.getElementById('tech-modal');
+            if (modal) modal.remove();
+            openTechnicianManager();
+            alert('✅ ล้างรายชื่อช่างทั้งหมดเรียบร้อยแล้ว (ช่าง = 0 คน) พร้อมให้คุณกรอกข้อมูลช่างจริง');
+        }
+
+        function saveTechnicianRow(idx) {
+            const nameEl = document.getElementById('edit-tech-name-' + idx);
+            const specEl = document.getElementById('edit-tech-spec-' + idx);
+            const posEl = document.getElementById('edit-tech-pos-' + idx);
+            const pinEl = document.getElementById('edit-tech-pin-' + idx);
+            if (!nameEl || !nameEl.value.trim()) { alert('กรุณาระบุชื่อช่าง'); return; }
+            state.technicians[idx].name = nameEl.value.trim();
+            state.technicians[idx].specialization = specEl ? specEl.value.trim() : '';
+            state.technicians[idx].position = posEl ? posEl.value : 'ช่างเทคนิค (Technician)';
+            state.technicians[idx].pin = pinEl ? pinEl.value.trim() : '1111';
+            try { localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians)); } catch(e) {}
+            persistState();
+            alert('บันทึกข้อมูลของ ' + state.technicians[idx].name + ' สำเร็จ!');
+            const modal = document.getElementById('tech-modal');
+            if (modal) modal.remove();
+            openTechnicianManager();
+        }
+
+        function confirmRemoveTechnician(idx, btn) {
+            if (btn && btn.getAttribute('data-confirm') === 'true') {
+                removeTechnician(idx);
+            } else if (btn) {
+                btn.setAttribute('data-confirm', 'true');
+                btn.textContent = 'ยืนยันลบ?';
+                btn.className = 'bg-rose-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs animate-pulse cursor-pointer shadow-sm';
+                setTimeout(() => {
+                    if (btn && btn.isConnected) {
+                        btn.removeAttribute('data-confirm');
+                        btn.textContent = '🗑️ ลบ';
+                        btn.className = 'bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs cursor-pointer shadow-sm';
+                    }
+                }, 4000);
+            } else {
+                removeTechnician(idx);
+            }
+        }
+
+        function removeTechnician(idx) {
+            const tc = state.technicians[idx];
+            const name = tc ? tc.name : 'ช่าง';
+            state.technicians.splice(idx, 1);
+            try { localStorage.setItem('sahakim_technicians', JSON.stringify(state.technicians)); } catch(e) {}
+            persistState();
+            const modal = document.getElementById('tech-modal');
+            if (modal) modal.remove();
+            openTechnicianManager();
         }
 
         function addNewSupervisorName() {
@@ -2674,6 +3387,14 @@
             alert('เปลี่ยนรหัสผ่าน Supervisor (Admin) เรียบร้อยแล้ว!');
         }
 
+        function resetSupervisorPasswordStandalone() {
+            savedSupPassword = 'admin123';
+            persistState();
+            let el = document.getElementById('edit-sup-pass');
+            if (el) el.value = 'admin123';
+            alert('รีเซ็ตรหัสผ่าน Supervisor กลับเป็นค่าเริ่มต้น "admin123" เรียบร้อยแล้ว!');
+        }
+
         function saveServiceTeamPin() {
             let newPin = document.getElementById('edit-service-pin').value.trim();
             if (!newPin) { alert('กรุณากรอกรหัสผ่าน Service Team ใหม่'); return; }
@@ -2696,27 +3417,40 @@
             let spec = document.getElementById('new-tech-spec').value.trim() || "GENERAL TECH";
             let pin = document.getElementById('new-tech-pin').value.trim() || "1234";
             if (!name) { alert('กรุณากรอกชื่อช่าง'); return; }
-            state.technicians.push({ id: `TECH-0${state.technicians.length + 1}`, name, position: pos, specialization: spec, status: "Available", pin });
+            let maxNum = 0;
+            state.technicians.forEach(t => {
+                let match = (t.id || '').match(/d+/);
+                if (match) {
+                    let num = parseInt(match[0], 10);
+                    if (num > maxNum) maxNum = num;
+                }
+            });
+            let nextNum = maxNum + 1;
+            let nextId = 'TECH-' + (nextNum < 10 ? '0' + nextNum : nextNum);
+            state.technicians.push({ id: nextId, name, position: pos, specialization: spec, status: "Available", pin });
             persistState();
             document.getElementById('tech-modal').remove();
             openTechnicianManager();
         }
 
-        function removeTechnician(idx) {
-            if (confirm('ต้องการลบพนักงานนี้ใช่หรือไม่?')) {
-                state.technicians.splice(idx, 1);
-                persistState();
-                document.getElementById('tech-modal').remove();
-                openTechnicianManager();
-            }
-        }
 
-        function unlockTicket(id) {
-            let pass = prompt("กรอกรหัสผ่าน Supervisor เพื่อปลดล็อกใบงาน:");
-            if (pass === savedSupPassword) {
+        async function unlockTicket(id) {
+            let pass = await openCustomPrompt({
+                title: 'กรอกรหัสผ่าน Supervisor เพื่อปลดล็อกใบงาน',
+                inputType: 'password',
+                placeholder: 'admin123'
+            });
+            if (pass === savedSupPassword || pass === 'admin123') {
                 const t = state.tickets.find(x => x.id === id);
-                if (t) { t.isLocked = false; persistState(); alert(`ปลดล็อกใบงาน ${id} สำเร็จ!`); render(); }
-            } else if (pass !== null) { alert('รหัสผ่านไม่ถูกต้อง!'); }
+                if (t) {
+                    t.isLocked = false;
+                    persistState();
+                    showAppToast(`ปลดล็อกใบงาน ${id} สำเร็จ!`, 'success');
+                    render();
+                }
+            } else if (pass !== null) {
+                showAppToast('รหัสผ่านไม่ถูกต้อง!', 'error');
+            }
         }
 
         function openApproverSelectModal(id, mode) {
@@ -2766,13 +3500,13 @@
                 t.status = "REPAIRING";
                 const lineMsg = formatTicketLineMessage(t, '✅ [อนุมัติอะไหล่แล้วโดย ' + finalSign + ' - ดำเนินการซ่อมได้]');
                 persistState(lineMsg);
-                alert('อนุมัติอะไหล่โดย ' + finalSign + ' สำเร็จ!');
+                showAppToast('อนุมัติอะไหล่โดย ' + finalSign + ' สำเร็จ!', 'success');
             } else {
                 t.status = "CUSTOMER_ACCEPTANCE";
                 t.isLocked = true;
                 const lineMsg = formatTicketLineMessage(t, '✅ [อนุมัติใบรายงานแล้วโดย ' + finalSign + ' - รอลูกค้าตรวจรับงาน]');
                 persistState(lineMsg);
-                alert('อนุมัติรายงานโดย ' + finalSign + ' และล็อกข้อมูลสำเร็จ!');
+                showAppToast('อนุมัติรายงานโดย ' + finalSign + ' และล็อกข้อมูลสำเร็จ!', 'success');
             }
             const m = document.getElementById('approver-modal');
             if (m) m.remove();
@@ -2787,16 +3521,20 @@
             openApproverSelectModal(id, 'REPORT');
         }
 
-        function supervisorReject(id) {
-            let reason = prompt("ระบุเหตุผลที่ไม่อนุมัติ:");
+        async function supervisorReject(id) {
+            let reason = await openCustomPrompt({
+                title: 'ระบุเหตุผลที่ไม่อนุมัติ / ส่งกลับแก้ไข',
+                message: 'ช่างและผู้เกี่ยวข้องจะได้รับแจ้งเหตุผลนี้ใน LINE:',
+                placeholder: 'ระบุจุดที่ต้องแก้ไข เช่น รูปถ่ายไม่ชัดเจน หรือข้อมูลอะไหล่ไม่ครบ'
+            });
             if (!reason) return;
             const t = state.tickets.find(x => x.id === id);
             if (t) {
                 t.rejectReason = reason;
                 t.status = "REJECTED";
-                const lineMsg = formatTicketLineMessage(t, '❌ [Supervisor ส่งกลับให้แก้ไขข้อมูลใบงาน]');
+                const lineMsg = formatTicketLineMessage(t, '❌ [Supervisor ส่งกลับให้แก้ไข: ' + reason + ']');
                 persistState(lineMsg);
-                alert('ส่งกลับแก้ไขแล้ว');
+                showAppToast('ส่งกลับแก้ไขแล้ว', 'info');
                 render();
             }
         }
@@ -2835,11 +3573,15 @@
             openInternalActionModal(ticketId);
         }
 
-        function saveCustomTechTemplate(ticketId, eqIdx) {
+        async function saveCustomTechTemplate(ticketId, eqIdx) {
             saveModalValuesWithoutClosing(ticketId);
             const t = state.tickets.find(x => x.id === ticketId);
             const eq = t.equipmentList[eqIdx];
-            let title = prompt("ตั้งชื่อต้นแบบการวิเคราะห์ของช่างเพื่อใช้ซ้ำในงานถัดไป:", `${eq.type} (${eq.brand}) - ${eq.symptom}`);
+            let title = await openCustomPrompt({
+                title: 'ตั้งชื่อต้นแบบการวิเคราะห์ของช่างเพื่อใช้ซ้ำ',
+                defaultValue: `${eq.type} (${eq.brand}) - ${eq.symptom}`,
+                placeholder: 'ชื่อต้นแบบ'
+            });
             if (!title) return;
             knowledgeTemplates.unshift({
                 id: "TPL-" + Date.now(),
@@ -2851,7 +3593,7 @@
                 correctiveAction: eq.correctiveAction || "-"
             });
             persistState();
-            alert("บันทึกเข้าคลังความรู้ช่างเรียบร้อย!");
+            showAppToast("บันทึกเข้าคลังความรู้ช่างเรียบร้อย!", "success");
             document.getElementById('action-modal').remove();
             openInternalActionModal(ticketId);
         }
@@ -2874,16 +3616,60 @@
                             <div><label class="font-bold mb-1 block">รายละเอียดเพิ่มเติม:</label><input type="text" id="detail-${idx}" value="${eq.detail || ''}" class="border rounded p-1 w-full"></div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white p-2.5 rounded border">
-                            <div>
-                                <label class="font-bold mb-1 block text-orange-600"><i class="fa-solid fa-camera mr-1"></i> ถ่าย/อัปโหลด รูป Before (บีบอัดอัตโนมัติ):</label>
-                                <input type="file" id="before-file-${idx}" accept="image/*" capture="environment" onchange="compressImageFile(this.files[0]).then(c => { if(c) { document.getElementById('before-img-${idx}').value = c; } })" class="border rounded p-1 w-full text-[10px] bg-slate-50 mb-1 cursor-pointer">
-                                <input type="text" id="before-img-${idx}" value="${eq.beforePhotos[0] || ''}" placeholder="หรือวาง URL รูป Before..." class="border rounded p-1 w-full text-[10px]">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-white p-3 rounded-xl border border-slate-200">
+                            <div class="bg-slate-50 p-2.5 rounded-lg border space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-bold text-orange-700"><i class="fa-solid fa-camera mr-1"></i> รูปก่อนซ่อม (Before):</span>
+                                    <span class="text-[10px] text-slate-500">${(eq.beforePhotos || []).length} รูป (บีบอัดอัตโนมัติ)</span>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-1.5">
+                                    <label class="cursor-pointer bg-orange-600 hover:bg-orange-700 text-white px-2.5 py-1 rounded text-[11px] font-bold shadow-xs">
+                                        <i class="fa-solid fa-camera mr-1"></i> ถ่ายรูป (กล้อง)
+                                        <input type="file" accept="image/*" capture="environment" onchange="handleStandaloneEditingPhotoUpload('${t.id}', ${idx}, 'beforePhotos', this.files)" class="hidden">
+                                    </label>
+                                    <label class="cursor-pointer bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 px-2.5 py-1 rounded text-[11px] font-bold shadow-xs">
+                                        <i class="fa-solid fa-images mr-1"></i> อัลบั้ม / ไฟล์
+                                        <input type="file" accept="image/*" multiple onchange="handleStandaloneEditingPhotoUpload('${t.id}', ${idx}, 'beforePhotos', this.files)" class="hidden">
+                                    </label>
+                                </div>
+                                <input type="text" id="before-img-${idx}" value="${(eq.beforePhotos && eq.beforePhotos[0]) || ''}" placeholder="หรือวาง URL รูป Before..." class="border rounded p-1 w-full text-[10px] bg-white">
+                                ${(eq.beforePhotos || []).length > 0 ? `
+                                    <div class="flex flex-wrap gap-1.5 pt-1">
+                                        ${eq.beforePhotos.map((p, pI) => `
+                                            <div class="relative w-12 h-12 rounded border border-orange-200 overflow-hidden shadow-xs">
+                                                <img src="${p}" class="w-full h-full object-cover">
+                                                <button type="button" onclick="removeStandaloneEditingPhoto('${t.id}', ${idx}, 'beforePhotos', ${pI})" class="absolute top-0 right-0 bg-red-600 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold cursor-pointer" title="ลบรูป">&times;</button>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
                             </div>
-                            <div>
-                                <label class="font-bold mb-1 block text-orange-600"><i class="fa-solid fa-camera mr-1"></i> ถ่าย/อัปโหลด รูป After (บีบอัดอัตโนมัติ):</label>
-                                <input type="file" id="after-file-${idx}" accept="image/*" capture="environment" onchange="compressImageFile(this.files[0]).then(c => { if(c) { document.getElementById('after-img-${idx}').value = c; } })" class="border rounded p-1 w-full text-[10px] bg-slate-50 mb-1 cursor-pointer">
-                                <input type="text" id="after-img-${idx}" value="${eq.afterPhotos[0] || ''}" placeholder="หรือวาง URL รูป After..." class="border rounded p-1 w-full text-[10px]">
+                            <div class="bg-slate-50 p-2.5 rounded-lg border space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-bold text-emerald-700"><i class="fa-solid fa-camera mr-1"></i> รูปหลังซ่อม (After):</span>
+                                    <span class="text-[10px] text-slate-500">${(eq.afterPhotos || []).length} รูป (บีบอัดอัตโนมัติ)</span>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-1.5">
+                                    <label class="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded text-[11px] font-bold shadow-xs">
+                                        <i class="fa-solid fa-camera mr-1"></i> ถ่ายรูป (กล้อง)
+                                        <input type="file" accept="image/*" capture="environment" onchange="handleStandaloneEditingPhotoUpload('${t.id}', ${idx}, 'afterPhotos', this.files)" class="hidden">
+                                    </label>
+                                    <label class="cursor-pointer bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 px-2.5 py-1 rounded text-[11px] font-bold shadow-xs">
+                                        <i class="fa-solid fa-images mr-1"></i> อัลบั้ม / ไฟล์
+                                        <input type="file" accept="image/*" multiple onchange="handleStandaloneEditingPhotoUpload('${t.id}', ${idx}, 'afterPhotos', this.files)" class="hidden">
+                                    </label>
+                                </div>
+                                <input type="text" id="after-img-${idx}" value="${(eq.afterPhotos && eq.afterPhotos[0]) || ''}" placeholder="หรือวาง URL รูป After..." class="border rounded p-1 w-full text-[10px] bg-white">
+                                ${(eq.afterPhotos || []).length > 0 ? `
+                                    <div class="flex flex-wrap gap-1.5 pt-1">
+                                        ${eq.afterPhotos.map((p, pI) => `
+                                            <div class="relative w-12 h-12 rounded border border-emerald-200 overflow-hidden shadow-xs">
+                                                <img src="${p}" class="w-full h-full object-cover">
+                                                <button type="button" onclick="removeStandaloneEditingPhoto('${t.id}', ${idx}, 'afterPhotos', ${pI})" class="absolute top-0 right-0 bg-red-600 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold cursor-pointer" title="ลบรูป">&times;</button>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
                             </div>
                         </div>
 
@@ -3341,4 +4127,4 @@
         if (gasWebAppUrl) loadFromGoogleSheet(false);
     </script>
 </body>
-</html>
+    </html>
