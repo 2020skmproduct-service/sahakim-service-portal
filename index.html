@@ -93,7 +93,7 @@
                 </button>
                 <button type="button" onclick="openGoogleSheetModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1.5 cursor-pointer">
                     <i class="fa-solid fa-table"></i>
-                    <span>☁️ ซิงค์ Google Sheet &amp; LINE</span>
+                    <span>☁️ ซิงค์ Google Sheet</span>
                 </button>
                 <button type="button" onclick="openMasterDataModal('brands')" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1.5 cursor-pointer">
                     <i class="fa-solid fa-sliders"></i>
@@ -135,10 +135,14 @@
             "EBARA", "GRUNDFOS", "SIEMENS", "ABB"
         ];
 
-        const GAS_CODE_TEMPLATE = "// ============================================================================\n// SAHA KIM MOTOR V12.1 - GOOGLE SHEETS + APPSHEET + LINE OA NOTIFICATION (Code.gs)\n// วิธีใช้งาน:\n// 1. เปิด Google Sheet -> ไปที่เมนู ส่วนขยาย (Extensions) > Apps Script\n// 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กดบันทึก (ไอคอนแผ่นดิสก์)\n// 3. กดปุ่ม \"ทำให้ใช้งานได้\" (Deploy) > \"จัดการการทำให้ใช้งานได้\" (Manage deployments)\n//    หรือ \"การทำให้ใช้งานได้รายการใหม่\" (New deployment) -> เลือกประเภท \"เว็บแอป\" (Web app)\n//    - ดำเนินการในฐานะ (Execute as): \"ฉัน\" (Me)\n//    - ผู้ที่มีสิทธิ์เข้าถึง (Who has access): \"ทุกคน\" (Anyone)\n// 4. คัดลอก Web App URL (ลงท้ายด้วย /exec) มาวางในหน้าตั้งค่าของ Supervisor\n// ============================================================================\n\nconst SHEET_TICKETS = 'Tickets';\n\nfunction ensureHeaderRow(sheet) {\n  const headers = [\n    'TicketID',\n    'Company',\n    'TaxID',\n    'DocNo',\n    'Contact',\n    'SiteContact',\n    'Location',\n    'Warranty',\n    'ServiceType',\n    'Urgency',\n    'DesiredDate',\n    'ConfirmedDate',\n    'Status',\n    'AssignedTech',\n    'ApprovedBySupervisor',\n    'EquipmentSummary',\n    'CreatedAt',\n    'RawJson'\n  ];\n  if (sheet.getLastRow() === 0) {\n    sheet.appendRow(headers);\n    sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n  } else {\n    const firstCell = String(sheet.getRange(1, 1).getValue() || '').trim();\n    if (firstCell !== 'TicketID') {\n      sheet.getRange(1, 1, 1, 18).setValues([headers]);\n      sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n    }\n  }\n}\n\nfunction setupSheets() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  let sheet = ss.getSheetByName(SHEET_TICKETS);\n  if (!sheet) {\n    // หากแผ่นงานแรกสุดยังว่างเปล่า ให้เปลี่ยนชื่อเป็น Tickets ทันทีเพื่อให้ผู้ใช้เห็นข้อมูลในหน้าแรกเลย\n    const firstSheet = ss.getSheets()[0];\n    if (firstSheet && firstSheet.getLastRow() === 0) {\n      firstSheet.setName(SHEET_TICKETS);\n      sheet = firstSheet;\n    } else {\n      sheet = ss.insertSheet(SHEET_TICKETS, 0);\n    }\n  }\n  ensureHeaderRow(sheet);\n  try {\n    ss.setActiveSheet(sheet);\n    ss.moveActiveSheet(1);\n  } catch (e) {}\n  return sheet;\n}\n\n// ฟังก์ชันลดขนาดรูปภาพ Base64 ใน RawJson เพื่อไม่ให้เกินลิมิต 50,000 ตัวอักษรต่อเซลล์ของ Google Sheets\nfunction sanitizeTicketForSheet(t) {\n  try {\n    const copy = JSON.parse(JSON.stringify(t));\n    if (Array.isArray(copy.equipmentList)) {\n      copy.equipmentList = copy.equipmentList.map(function(eq) {\n        if (Array.isArray(eq.beforePhotos)) {\n          eq.beforePhotos = eq.beforePhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600'\n              : p;\n          });\n        }\n        if (Array.isArray(eq.afterPhotos)) {\n          eq.afterPhotos = eq.afterPhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600'\n              : p;\n          });\n        }\n        return eq;\n      });\n    }\n    return copy;\n  } catch (e) {\n    return t;\n  }\n}\n\n// ฟังก์ชันออก LINE Access Token อัตโนมัติพร้อมจำค่าไว้ใน PropertiesService เพื่อความรวดเร็วสูงสุด\nfunction getValidLineToken(customToken) {\n  try {\n    const props = PropertiesService.getScriptProperties();\n    const cachedToken = props.getProperty('CACHED_LINE_OAUTH_TOKEN');\n    const cachedExp = Number(props.getProperty('CACHED_LINE_OAUTH_EXP') || '0');\n    const now = Date.now();\n    if (cachedToken && cachedExp > now + 60000) {\n      return cachedToken;\n    }\n    const res = UrlFetchApp.fetch('https://api.line.me/v2/oauth/accessToken', {\n      method: 'post',\n      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n      payload: 'grant_type=client_credentials&client_id=2012276060&client_secret=db6f7a7f17771925cc3dd2ff0aa38ab5',\n      muteHttpExceptions: true\n    });\n    const data = JSON.parse(res.getContentText());\n    if (data && data.access_token) {\n      props.setProperty('CACHED_LINE_OAUTH_TOKEN', data.access_token);\n      props.setProperty('CACHED_LINE_OAUTH_EXP', String(now + (data.expires_in || 2592000) * 1000));\n      return data.access_token;\n    }\n  } catch (e) {\n    Logger.log('LINE OAuth Error: ' + e);\n  }\n  if (customToken && String(customToken).trim().length > 40) {\n    return String(customToken).trim();\n  }\n  return '';\n}\n\n// ฟังก์ชันส่งข้อความแจ้งเตือนเข้า LINE Official Account (Push เข้ากลุ่ม หรือ Broadcast หาเพื่อนทุกคนของบอท)\nfunction sendLinePush(channelToken, targetId, messageText) {\n  const token = getValidLineToken(channelToken);\n  if (!token || !messageText) return;\n  const cleanTarget = targetId ? String(targetId).trim() : '';\n  try {\n    if (cleanTarget && cleanTarget !== 'BROADCAST') {\n      UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {\n        method: 'post',\n        headers: {\n          'Content-Type': 'application/json',\n          'Authorization': 'Bearer ' + token\n        },\n        payload: JSON.stringify({\n          to: cleanTarget,\n          messages: [{ type: 'text', text: messageText }]\n        }),\n        muteHttpExceptions: true\n      });\n    }\n    // ส่งแบบ Broadcast หาทุกคนที่เป็นเพื่อนกับบอท @389fyhbl ควบคู่กันเสมอ\n    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {\n      method: 'post',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': 'Bearer ' + token\n      },\n      payload: JSON.stringify({\n        messages: [{ type: 'text', text: messageText }]\n      }),\n      muteHttpExceptions: true\n    });\n  } catch (err) {\n    Logger.log('LINE Notify Error: ' + err);\n  }\n}\n\nfunction doGet(e) {\n  const sheet = setupSheets();\n  const rows = sheet.getDataRange().getValues();\n  const tickets = [];\n  for (let i = 1; i < rows.length; i++) {\n    const rawJson = rows[i][17];\n    if (rawJson) {\n      try {\n        tickets.push(JSON.parse(rawJson));\n      } catch (err) {}\n    }\n  }\n  const props = PropertiesService.getScriptProperties();\n  const lineGroupId = props.getProperty('LINE_GROUP_ID') || '';\n  const lineTargetId = props.getProperty('LINE_TARGET_ID') || lineGroupId || '';\n  return ContentService\n    .createTextOutput(JSON.stringify({\n      status: 'ok',\n      tickets: tickets,\n      lineGroupId: lineGroupId,\n      targetId: lineTargetId\n    }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    const props = PropertiesService.getScriptProperties();\n    const payload = JSON.parse(e.postData.contents);\n\n    if (payload.lineChannelToken) {\n      props.setProperty('LINE_TOKEN', payload.lineChannelToken.trim());\n    }\n    if (payload.lineTargetId) {\n      props.setProperty('LINE_TARGET_ID', payload.lineTargetId.trim());\n    }\n\n    // กรณี LINE Webhook ยิงเข้ามาเมื่อเชิญบอทเข้ากลุ่ม หรือพิมพ์ข้อความหาบอท\n    if (payload.events && payload.events.length > 0) {\n      const ev = payload.events[0];\n      const savedToken = getValidLineToken('');\n      if (ev.source && ev.source.groupId) {\n        props.setProperty('LINE_GROUP_ID', ev.source.groupId);\n      }\n      if (ev.replyToken && ev.source && savedToken) {\n        const isGroup = Boolean(ev.source.groupId);\n        const idInfo = isGroup\n          ? '✅ เชื่อมต่อกลุ่ม LINE สำเร็จ!\\n📌 Group ID: ' + ev.source.groupId + '\\n🔗 เปิดระบบ: https://2020skmproduct-service.github.io/sahakim-service-portal/'\n          : '⚡ ระบบอัตโนมัติ บริษัท สหคิมมอเตอร์ จำกัด (@389fyhbl)\\n📌 สถานะบอท: ออนไลน์พร้อมแจ้งเตือนทันที\\n📌 User ID: ' + (ev.source.userId || '-') + '\\n🔗 เปิดเว็บแอปแจ้งซ่อม/ติดตามงาน:\\nhttps://2020skmproduct-service.github.io/sahakim-service-portal/';\n        const msgTxt = (ev.message && ev.message.text) ? ev.message.text.trim() : '';\n        if (!isGroup || ev.type === 'join' || msgTxt === '/id' || msgTxt === 'id' || msgTxt.indexOf('สวัสดี') !== -1 || msgTxt.indexOf('ทดสอบ') !== -1) {\n          UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {\n            method: 'post',\n            headers: {\n              'Content-Type': 'application/json',\n              'Authorization': 'Bearer ' + savedToken\n            },\n            payload: JSON.stringify({\n              replyToken: ev.replyToken,\n              messages: [{ type: 'text', text: idInfo }]\n            }),\n            muteHttpExceptions: true\n          });\n        }\n      }\n      return ContentService.createTextOutput(JSON.stringify({ status: 'line_webhook_ok' })).setMimeType(ContentService.MimeType.JSON);\n    }\n\n    // ส่งแจ้งเตือนเข้า LINE ทันทีหากมีข้อความแจ้งเตือนส่งมาด้วย\n    if (payload.lineNotifyText) {\n      const tokenToUse = getValidLineToken(payload.lineChannelToken);\n      const targetToUse = payload.lineTargetId || props.getProperty('LINE_TARGET_ID') || props.getProperty('LINE_GROUP_ID') || '';\n      if (tokenToUse) {\n        sendLinePush(tokenToUse, targetToUse, payload.lineNotifyText);\n      }\n    }\n\n    // บันทึกข้อมูลลง Google Sheets\n    let writtenCount = 0;\n    if (Array.isArray(payload.tickets)) {\n      const sheet = setupSheets();\n      const tickets = payload.tickets;\n\n      if (sheet.getLastRow() > 1) {\n        sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).clearContent();\n      }\n\n      const rowsToWrite = tickets.map(function(t) {\n        const cleanT = sanitizeTicketForSheet(t);\n        const eqSummary = (cleanT.equipmentList || []).map(function(eq) {\n          return eq.type + ' (' + eq.brand + ' ' + (eq.model || '') + '): ' + eq.symptom;\n        }).join(' | ');\n\n        const techDisplay = cleanT.leadTech\n          ? (cleanT.assignedTech || '') + ' (หน.ช่าง: ' + cleanT.leadTech + ')'\n          : (cleanT.assignedTech || '');\n\n        let rawJsonStr = JSON.stringify(cleanT);\n        if (rawJsonStr.length > 48000) {\n          rawJsonStr = rawJsonStr.substring(0, 48000);\n        }\n\n        return [\n          String(cleanT.id || '').substring(0, 500),\n          String(cleanT.company || '').substring(0, 1000),\n          String(cleanT.taxId || '').substring(0, 500),\n          String(cleanT.docNo || '').substring(0, 500),\n          String(cleanT.contact || '').substring(0, 1000),\n          String(cleanT.siteContact || '').substring(0, 1000),\n          String(cleanT.location || '').substring(0, 2000),\n          String(cleanT.warranty || '').substring(0, 500),\n          String(cleanT.serviceType || '').substring(0, 500),\n          String(cleanT.urgency || '').substring(0, 500),\n          String(cleanT.desiredDate || '').substring(0, 500),\n          String(cleanT.confirmedDate || '').substring(0, 500),\n          String(cleanT.status || '').substring(0, 500),\n          String(techDisplay).substring(0, 1000),\n          String(cleanT.approvedBySupervisor || '').substring(0, 1000),\n          String(eqSummary).substring(0, 5000),\n          String(cleanT.createdAt || '').substring(0, 500),\n          rawJsonStr\n        ];\n      });\n\n      if (rowsToWrite.length > 0) {\n        sheet.getRange(2, 1, rowsToWrite.length, 18).setValues(rowsToWrite);\n        writtenCount = rowsToWrite.length;\n      }\n      SpreadsheetApp.flush();\n    }\n\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'ok', updatedRows: writtenCount, updatedAt: new Date().toISOString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}";
+        const GAS_CODE_TEMPLATE = "// ============================================================================\n// SAHA KIM MOTOR V12.1 - GOOGLE SHEETS + APPSHEET + LINE OA NOTIFICATION (Code.gs)\n// วิธีใช้งาน:\n// 1. เปิด Google Sheet -> ไปที่เมนู ส่วนขยาย (Extensions) > Apps Script\n// 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กดบันทึก (ไอคอนแผ่นดิสก์)\n// 3. กดปุ่ม \"ทำให้ใช้งานได้\" (Deploy) > \"จัดการการทำให้ใช้งานได้\" (Manage deployments)\n//    หรือ \"การทำให้ใช้งานได้รายการใหม่\" (New deployment) -> เลือกประเภท \"เว็บแอป\" (Web app)\n//    - ดำเนินการในฐานะ (Execute as): \"ฉัน\" (Me)\n//    - ผู้ที่มีสิทธิ์เข้าถึง (Who has access): \"ทุกคน\" (Anyone)\n// 4. คัดลอก Web App URL (ลงท้ายด้วย /exec) มาวางในหน้าตั้งค่าของ Supervisor\n// ============================================================================\n\nconst SHEET_TICKETS = 'Tickets';\n\nfunction ensureHeaderRow(sheet) {\n  const headers = [\n    'TicketID',\n    'Company',\n    'TaxID',\n    'DocNo',\n    'Contact',\n    'SiteContact',\n    'Location',\n    'Warranty',\n    'ServiceType',\n    'Urgency',\n    'DesiredDate',\n    'ConfirmedDate',\n    'Status',\n    'AssignedTech',\n    'ApprovedBySupervisor',\n    'EquipmentSummary',\n    'CreatedAt',\n    'RawJson'\n  ];\n  if (sheet.getLastRow() === 0) {\n    sheet.appendRow(headers);\n    sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n  } else {\n    const firstCell = String(sheet.getRange(1, 1).getValue() || '').trim();\n    if (firstCell !== 'TicketID') {\n      sheet.getRange(1, 1, 1, 18).setValues([headers]);\n      sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n    }\n  }\n}\n\nfunction setupSheets() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  let sheet = ss.getSheetByName(SHEET_TICKETS);\n  if (!sheet) {\n    // หากแผ่นงานแรกสุดยังว่างเปล่า ให้เปลี่ยนชื่อเป็น Tickets ทันทีเพื่อให้ผู้ใช้เห็นข้อมูลในหน้าแรกเลย\n    const firstSheet = ss.getSheets()[0];\n    if (firstSheet && firstSheet.getLastRow() === 0) {\n      firstSheet.setName(SHEET_TICKETS);\n      sheet = firstSheet;\n    } else {\n      sheet = ss.insertSheet(SHEET_TICKETS, 0);\n    }\n  }\n  ensureHeaderRow(sheet);\n  try {\n    ss.setActiveSheet(sheet);\n    ss.moveActiveSheet(1);\n  } catch (e) {}\n  return sheet;\n}\n\n// ฟังก์ชันลดขนาดรูปภาพ Base64 ใน RawJson เพื่อไม่ให้เกินลิมิต 50,000 ตัวอักษรต่อเซลล์ของ Google Sheets\nfunction sanitizeTicketForSheet(t) {\n  try {\n    const copy = JSON.parse(JSON.stringify(t));\n    if (Array.isArray(copy.equipmentList)) {\n      copy.equipmentList = copy.equipmentList.map(function(eq) {\n        if (Array.isArray(eq.beforePhotos)) {\n          eq.beforePhotos = eq.beforePhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600'\n              : p;\n          });\n        }\n        if (Array.isArray(eq.afterPhotos)) {\n          eq.afterPhotos = eq.afterPhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600'\n              : p;\n          });\n        }\n        return eq;\n      });\n    }\n    return copy;\n  } catch (e) {\n    return t;\n  }\n}\n\nfunction doGet(e) {\n  const sheet = setupSheets();\n  const rows = sheet.getDataRange().getValues();\n  const tickets = [];\n  for (let i = 1; i < rows.length; i++) {\n    const rawJson = rows[i][17];\n    if (rawJson) {\n      try {\n        tickets.push(JSON.parse(rawJson));\n      } catch (err) {}\n    }\n  }\n  return ContentService\n    .createTextOutput(JSON.stringify({\n      status: 'ok',\n      tickets: tickets\n    }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    const payload = JSON.parse(e.postData.contents);\n    let writtenCount = 0;\n    if (Array.isArray(payload.tickets)) {\n      const sheet = setupSheets();\n      const tickets = payload.tickets;\n\n      if (sheet.getLastRow() > 1) {\n        sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).clearContent();\n      }\n\n      const rowsToWrite = tickets.map(function(t) {\n        const cleanT = sanitizeTicketForSheet(t);\n        const eqSummary = (cleanT.equipmentList || []).map(function(eq) {\n          return eq.type + ' (' + eq.brand + ' ' + (eq.model || '') + '): ' + eq.symptom;\n        }).join(' | ');\n\n        const techDisplay = cleanT.leadTech\n          ? (cleanT.assignedTech || '') + ' (หน.ช่าง: ' + cleanT.leadTech + ')'\n          : (cleanT.assignedTech || '');\n\n        let rawJsonStr = JSON.stringify(cleanT);\n        if (rawJsonStr.length > 48000) {\n          rawJsonStr = rawJsonStr.substring(0, 48000);\n        }\n\n        return [\n          String(cleanT.id || '').substring(0, 500),\n          String(cleanT.company || '').substring(0, 1000),\n          String(cleanT.taxId || '').substring(0, 500),\n          String(cleanT.docNo || '').substring(0, 500),\n          String(cleanT.contact || '').substring(0, 1000),\n          String(cleanT.siteContact || '').substring(0, 1000),\n          String(cleanT.location || '').substring(0, 2000),\n          String(cleanT.warranty || '').substring(0, 500),\n          String(cleanT.serviceType || '').substring(0, 500),\n          String(cleanT.urgency || '').substring(0, 500),\n          String(cleanT.desiredDate || '').substring(0, 500),\n          String(cleanT.confirmedDate || '').substring(0, 500),\n          String(cleanT.status || '').substring(0, 500),\n          String(techDisplay).substring(0, 1000),\n          String(cleanT.approvedBySupervisor || '').substring(0, 1000),\n          String(eqSummary).substring(0, 5000),\n          String(cleanT.createdAt || '').substring(0, 500),\n          rawJsonStr\n        ];\n      });\n\n      if (rowsToWrite.length > 0) {\n        sheet.getRange(2, 1, rowsToWrite.length, 18).setValues(rowsToWrite);\n        writtenCount = rowsToWrite.length;\n      }\n      SpreadsheetApp.flush();\n    }\n\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'ok', updatedRows: writtenCount, updatedAt: new Date().toISOString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}";
         let gasWebAppUrl = localStorage.getItem('sahakim_gas_url') || "";
-        let lineChannelToken = localStorage.getItem('sahakim_line_token') || "";
-        let lineTargetId = localStorage.getItem('sahakim_line_target') || "U06c362e9f915ac7496e353cc3396fdf4";
+        try {
+            localStorage.removeItem('sahakim_line_token');
+            localStorage.removeItem('sahakim_line_target');
+        } catch (e) {}
+        let lineChannelToken = '';
+        let lineTargetId = '';
 
         function safeJsonParse(val, fallback) {
             if (!val || typeof val !== 'string') return fallback;
@@ -333,7 +337,7 @@
         let companyProfile = safeJsonParse(localStorage.getItem('sahakim_company_profile_v1'), {
             nameTh: 'บริษัท สหคิมมอเตอร์ จำกัด',
             nameEn: 'SAHA KIM MOTOR CO., LTD.',
-            phone: '02-XXX-XXXX / LINE Official: @389fyhbl',
+            phone: '02-XXX-XXXX',
             tagline: 'บริการซ่อม บำรุงรักษา และจำหน่ายปั๊มน้ำ มอเตอร์ Blower, Gen Set, Sewage, Aerator และระบบควบคุมอุตสาหกรรม'
         });
         const CLOUD_SYNC_API_URL = (window.location.origin.includes('run.app') || window.location.origin.includes('localhost'))
@@ -673,7 +677,7 @@
             t.status = 'NEW';
             try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
             persistState();
-            syncToGoogleSheet('🔄 [ปลดช่าง] ปลดช่างออกจากใบงาน ' + t.id + ' (' + t.company + ') คิวงานว่างพร้อมรับงานใหม่');
+            syncToGoogleSheet();
             pushToCloudSyncServer('unassign_ticket_' + ticketId);
             showAppToast('ปลดช่าง ' + prevTech + ' ออกจากใบงาน ' + ticketId + ' เรียบร้อยแล้ว (คิวงานช่างว่างลงแล้ว)', 'success');
             render();
@@ -683,9 +687,9 @@
             const badge = document.getElementById('gsheet-status-badge');
             if (!badge) return;
             if (gasWebAppUrl) {
-                badge.textContent = 'ซิงค์ Google Sheet + แจ้งเตือน LINE (@389fyhbl) แล้ว';
+                badge.textContent = 'ซิงค์ Google Sheet แล้ว';
             } else {
-                badge.textContent = 'ตั้งค่า Google Sheet & แจ้งเตือน LINE';
+                badge.textContent = 'ตั้งค่า Google Sheet';
             }
         }
 
@@ -813,9 +817,12 @@
         }
 
         async function syncAllTicketsUpdateToLine() {
-            const msg = formatAllTicketsSummaryLineMessage(state.tickets);
-            await syncToGoogleSheet(msg);
-            alert('✅ อัปเดตข้อมูลใบงานทั้งหมด (' + state.tickets.length + ' ใบงาน) และส่งแจ้งเตือนผ่านบอท Sahakim.service bot (@389fyhbl) เรียบร้อยแล้ว!');
+            if (!gasWebAppUrl) {
+                openGoogleSheetModal();
+                return;
+            }
+            await syncToGoogleSheet();
+            alert('✅ อัปเดตข้อมูลใบงานทั้งหมด (' + state.tickets.length + ' ใบงาน) ลง Google Sheet เรียบร้อยแล้ว!');
         }
 
         async function notifyOverdueTicketsToLine() {
@@ -824,28 +831,19 @@
                 alert('✅ ไม่มีงานค้างที่เกินกำหนดนัดหมายในขณะนี้ (ทุกใบงานอยู่ในกำหนดเวลา)');
                 return;
             }
-            const msg = formatOverdueSummaryLineMessage(overdueList);
-            await syncToGoogleSheet(msg);
-            alert('🚨 ส่งแจ้งเตือนงานค้างเกินกำหนดนัดหมาย (' + overdueList.length + ' ใบงาน) ผ่านบอท Sahakim.service bot เรียบร้อยแล้ว!');
+            alert('🚨 มีงานค้างเกินกำหนดนัดหมาย ' + overdueList.length + ' ใบงาน กรุณาตรวจสอบในรายการ');
         }
 
         async function shareTicketToLine(ticketId, customHeading) {
             const t = state.tickets.find(x => x.id === ticketId);
             if (!t) return;
-            const msg = formatTicketLineMessage(t, customHeading || '📢 [แจ้งเตือนใบงาน - บริษัท สหคิมมอเตอร์ จำกัด]');
+            const msg = formatTicketLineMessage(t, customHeading || '📋 [สรุปรายละเอียดใบงาน - บริษัท สหคิมมอเตอร์ จำกัด]');
             try {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     await navigator.clipboard.writeText(msg);
                 }
-            } catch (e) {
-                // ignore
-            }
-            if (gasWebAppUrl) {
-                await syncToGoogleSheet(msg);
-                alert('✅ คัดลอกข้อความใบงาน ' + t.id + ' ลงคลิปบอร์ดแล้ว (และส่งซิงค์แจ้งเตือนเข้าบอท LINE เรียบร้อย)');
-            } else {
-                alert('📋 คัดลอกข้อความแจ้งเตือนใบงาน ' + t.id + ' ลงคลิปบอร์ดเรียบร้อยแล้ว! สามารถกดวาง (Paste) ส่งเข้ากลุ่ม LINE ได้ทันที');
-            }
+            } catch (e) {}
+            alert('📋 คัดลอกข้อความสรุปใบงาน ' + t.id + ' ลงคลิปบอร์ดเรียบร้อยแล้ว!');
         }
 
         function sanitizeTicketsForSheet(list) {
@@ -868,30 +866,13 @@
             }));
         }
 
-        async function syncToGoogleSheet(lineNotifyText) {
-            const tasks = [];
-            if (lineNotifyText) {
-                tasks.push(
-                    fetch('https://smee.io/sahakim-line-2012276060', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            sahakimNotify: true,
-                            message: lineNotifyText,
-                            targetId: lineTargetId || ''
-                        })
-                    }).catch(e => console.warn('LINE Relay warning:', e))
-                );
-            }
+        async function syncToGoogleSheet() {
             if (gasWebAppUrl && !gasWebAppUrl.includes('docs.google.com/spreadsheets')) {
                 const payloadStr = JSON.stringify({
-                    tickets: sanitizeTicketsForSheet(state.tickets),
-                    lineNotifyText: lineNotifyText || '',
-                    lineChannelToken: lineChannelToken || '',
-                    lineTargetId: lineTargetId || ''
+                    tickets: sanitizeTicketsForSheet(state.tickets)
                 });
-                tasks.push(
-                    fetch(gasWebAppUrl, {
+                try {
+                    await fetch(gasWebAppUrl, {
                         method: 'POST',
                         redirect: 'follow',
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -903,11 +884,10 @@
                             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                             body: payloadStr
                         })
-                    ).catch(e => console.warn('Google Sheet / LINE Sync warning:', e))
-                );
-            }
-            if (tasks.length > 0) {
-                await Promise.allSettled(tasks);
+                    );
+                } catch (e) {
+                    console.warn('Google Sheet Sync warning:', e);
+                }
             }
         }
 
@@ -1434,7 +1414,7 @@
             modalBg.innerHTML = `
                 <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto text-xs sm:text-sm">
                     <div class="flex justify-between items-center border-b pb-2">
-                        <h3 class="font-bold text-base text-slate-900"><i class="fa-brands fa-line text-emerald-600 mr-1.5 text-lg"></i> ตั้งค่าฐานข้อมูล Google Sheets & แจ้งเตือนเข้า LINE อัตโนมัติ</h3>
+                        <h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-table text-emerald-600 mr-1.5 text-lg"></i> ตั้งค่าฐานข้อมูล Google Sheets (Real-Time Cloud Sync)</h3>
                         <button onclick="document.getElementById('gsheet-modal').remove()" class="text-xl font-bold cursor-pointer">&times;</button>
                     </div>
 
@@ -1446,36 +1426,20 @@
                     </div>
 
                     <div class="space-y-2">
-                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 1: คัดลอกโค้ด Apps Script เวอร์ชันรองรับ LINE & Google Sheet ด้านล่างไปวางใน Apps Script</label>
+                        <label class="block font-bold text-slate-800">ขั้นตอนที่ 1: คัดลอกโค้ด Apps Script สำหรับ Google Sheets ด้านล่างไปวางใน Apps Script</label>
                         <textarea id="gas-code-box" readonly rows="5" class="w-full border rounded-xl p-2 font-mono text-[11px] bg-slate-900 text-emerald-300"></textarea>
                         <button type="button" onclick="navigator.clipboard.writeText(GAS_CODE_TEMPLATE); alert('คัดลอกโค้ด Google Apps Script เรียบร้อย! นำไปวางใน Google Sheet > ส่วนขยาย > Apps Script แล้วกด Deploy เป็นรายการใหม่ได้เลย');" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-copy mr-1"></i> คัดลอกโค้ด Apps Script</button>
                     </div>
 
                     <div class="space-y-2 border-t pt-3">
                         <label class="block font-bold text-slate-800">ขั้นตอนที่ 2: วางลิงก์ Google Apps Script Web App URL (ต้องขึ้นต้นด้วย https://script.google.com/... และลงท้ายด้วย /exec)</label>
-                        <input type="url" id="gas-url-input" value="${gasWebAppUrl}" placeholder="https://script.google.com/macros/s/......./exec" class="w-full border rounded-xl p-2 font-mono text-xs">
+                        <div class="flex gap-2 items-center">
+                            <input type="url" id="gas-url-input" value="" placeholder="https://script.google.com/macros/s/......./exec" class="flex-1 border rounded-xl p-2 font-mono text-xs">
+                            <button type="button" onclick="clearGasUrl()" title="ลบลิงก์เดิมเพื่อใส่ลิงก์ใหม่" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3 py-2 rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap"><i class="fa-solid fa-trash mr-1"></i> ล้างลิงก์เดิม</button>
+                        </div>
                         <div class="flex flex-wrap gap-2 pt-1">
                             <button type="button" onclick="saveGasUrlAndSync(false)" class="bg-orange-500 hover:bg-orange-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-cloud-arrow-up mr-1"></i> อัปเดตข้อมูลปัจจุบันขึ้น Google Sheet ทันที</button>
                             <button type="button" onclick="loadFromGoogleSheet(true)" class="bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-cloud-arrow-down mr-1"></i> ดึงข้อมูลจาก Google Sheet ลงเว็บ</button>
-                        </div>
-                    </div>
-
-                    <div class="space-y-3 border-t pt-3 bg-slate-50 p-3.5 rounded-xl border">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <p class="font-bold text-slate-900 flex items-center gap-1.5"><i class="fa-brands fa-line text-emerald-600 text-base"></i> ขั้นตอนที่ 3: ตั้งค่าแจ้งเตือนเข้า LINE (@389fyhbl - Sahakim.service bot)</p>
-                            <span class="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full">เชื่อมบอท @389fyhbl อัตโนมัติแล้ว</span>
-                        </div>
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">LINE Channel Access Token (เว้นว่างได้เลย โค้ด Apps Script เชื่อมต่อให้อัตโนมัติแล้ว):</label>
-                            <input type="text" id="line-token-input" value="${lineChannelToken}" placeholder="เว้นว่างได้เลย (ระบบเชื่อมต่อ @389fyhbl อัตโนมัติ)" class="w-full border rounded-xl p-2 font-mono text-xs bg-white">
-                        </div>
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">LINE Group ID หรือ User ID (เว้นว่างได้ ระบบจะส่งเข้าแชท Sahakim.service bot อัตโนมัติ):</label>
-                            <input type="text" id="line-target-input" value="${lineTargetId}" placeholder="เว้นว่างเพื่อส่งเข้า Sahakim.service bot อัตโนมัติ หรือใส่ Group ID (C...)" class="w-full border rounded-xl p-2 font-mono text-xs bg-white">
-                        </div>
-                        <div class="flex flex-wrap gap-2 pt-1">
-                            <button type="button" onclick="testLineNotification()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-brands fa-line mr-1"></i> ทดสอบยิงแจ้งเตือนเข้า LINE</button>
-                            <button type="button" onclick="syncAllTicketsUpdateToLine()" class="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> อัปเดตข้อมูลใบงานทั้งหมดเข้า LINE & Sheet</button>
                         </div>
                     </div>
 
@@ -1489,46 +1453,45 @@
             document.getElementById('gas-code-box').value = GAS_CODE_TEMPLATE;
         }
 
-        async function testLineNotification() {
-            const urlVal = document.getElementById('gas-url-input').value.trim();
-            const tokenVal = document.getElementById('line-token-input').value.trim();
-            const targetVal = document.getElementById('line-target-input').value.trim();
-            gasWebAppUrl = urlVal;
-            lineChannelToken = tokenVal;
-            lineTargetId = targetVal;
-            localStorage.setItem('sahakim_gas_url', gasWebAppUrl);
-            localStorage.setItem('sahakim_line_token', lineChannelToken);
-            localStorage.setItem('sahakim_line_target', lineTargetId);
-
-            const testMsg = '✅ [ทดสอบระบบแจ้งเตือน LINE - บริษัท สหคิมมอเตอร์ จำกัด]\nเชื่อมต่อระบบแจ้งเตือนงานซ่อมใหม่และงานรออนุมัติสำเร็จ!\n🔗 https://2020skmproduct-service.github.io/sahakim-service-portal/';
-            await syncToGoogleSheet(testMsg);
-            alert('✅ ส่งข้อความทดสอบผ่านบอท Sahakim.service bot (@389fyhbl) เรียบร้อยแล้ว! กรุณาตรวจสอบในแชท LINE ของคุณ');
-        }
-
         async function saveGasUrlAndSync(closeAfter) {
             const val = document.getElementById('gas-url-input').value.trim();
-            const tokenVal = document.getElementById('line-token-input').value.trim();
-            const targetVal = document.getElementById('line-target-input').value.trim();
             if (val && val.includes('docs.google.com/spreadsheets') && !val.includes('script.google.com')) {
                 alert('⚠️ ลิงก์ที่วางเป็นลิงก์หน้าตาราง Google Sheet (docs.google.com)\n\nกรุณาใช้ลิงก์ Web App URL จากเมนู ส่วนขยาย > Apps Script > การทำให้ใช้งานได้ (Deploy) ที่ลงท้ายด้วย /exec แทนครับ');
                 return;
             }
             gasWebAppUrl = val;
-            lineChannelToken = tokenVal;
-            lineTargetId = targetVal;
+            lineChannelToken = '';
+            lineTargetId = '';
             localStorage.setItem('sahakim_gas_url', gasWebAppUrl);
-            localStorage.setItem('sahakim_line_token', lineChannelToken);
-            localStorage.setItem('sahakim_line_target', lineTargetId);
+            localStorage.removeItem('sahakim_line_token');
+            localStorage.removeItem('sahakim_line_target');
             updateGsheetBadge();
             if (gasWebAppUrl) {
                 await syncToGoogleSheet();
                 alert('✅ บันทึกลิงก์และส่งข้อมูลใบงานทั้งหมด (' + state.tickets.length + ' ใบงาน) ไปยังแท็บ Tickets ใน Google Sheet เรียบร้อยแล้ว!');
             } else {
-                alert('⚠️ บันทึกการตั้งค่าแล้ว (แต่ยังไม่ได้วางลิงก์ Google Apps Script Web App URL /exec)');
+                alert('⚠️ บันทึกการตั้งค่าแล้ว (ยังไม่มีการเชื่อมต่อ Google Sheets)');
             }
             if (closeAfter) {
                 const m = document.getElementById('gsheet-modal');
                 if (m) m.remove();
+            }
+        }
+
+        async function clearGasUrl() {
+            const confirmed = await openCustomConfirm({
+                title: '🗑️ ล้างลิงก์ Web App เดิม',
+                message: 'คุณต้องการลบลิงก์ Web App เดิมออก เพื่อตัดการเชื่อมต่อหรือวางลิงก์ใหม่ใช่หรือไม่?',
+                confirmText: 'ล้างลิงก์',
+                cancelText: 'ยกเลิก'
+            });
+            if (confirmed) {
+                const inp = document.getElementById('gas-url-input');
+                if (inp) inp.value = '';
+                gasWebAppUrl = '';
+                localStorage.removeItem('sahakim_gas_url');
+                updateGsheetBadge();
+                showAppToast('ล้างลิงก์เดิมเรียบร้อยแล้ว สามารถวางลิงก์ใหม่ได้เลย', 'info');
             }
         }
 
@@ -2769,9 +2732,8 @@
                                 <button onclick="switchRoleWithAuth('SUPERVISOR')" class="px-2.5 py-1 rounded-lg font-bold cursor-pointer ${state.userRole==='SUPERVISOR'?'bg-indigo-600 text-white':'text-slate-300'}">SUPERVISOR</button>
                             </div>
                             ${state.userRole === 'SUPERVISOR' ? `
-                                <button onclick="openMasterDataModal('brands')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer">⚙️ แก้ไขข้อมูลตั้งต้น</button>
-                                <button onclick="syncAllTicketsUpdateToLine()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> อัปเดตเข้า LINE</button>
-                                <button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้งงานค้าง (${overdueCount})</button>
+                                <button onclick="syncAllTicketsUpdateToLine()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-cloud-arrow-up mr-1"></i> อัปเดตลง Sheet</button>
+                                ${overdueCount > 0 ? `<button onclick="notifyOverdueTicketsToLine()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-triangle-exclamation mr-1"></i> งานค้าง (${overdueCount})</button>` : ''}
                                 <button onclick="openTechnicianManager()" class="bg-orange-500 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-users-gear mr-1"></i> จัดการช่าง</button>
                             ` : ''}
                             <button onclick="exportToExcel()" class="bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold shadow cursor-pointer"><i class="fa-solid fa-file-excel mr-1"></i> Export Excel</button>
@@ -3086,7 +3048,7 @@
                                                 </button>
                                             ` : ''}
                                             ${t.isLocked && state.userRole === 'SUPERVISOR' ? `<button onclick="unlockTicket('${t.id}')" class="bg-purple-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-key mr-1"></i> ปลดล็อก</button>` : ''}
-                                            <button onclick="shareTicketToLine('${t.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-brands fa-line mr-1"></i> แจ้ง LINE</button>
+                                            <button onclick="shareTicketToLine('${t.id}')" class="bg-slate-700 hover:bg-slate-800 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-copy mr-1"></i> คัดลอกสรุป</button>
                                             ${t.assignedTech ? `<button onclick="unassignTicket('${t.id}')" class="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="ปลดช่างออกจากใบงานนี้"><i class="fa-solid fa-user-xmark mr-1"></i> ปลดช่าง</button>` : ''}
                                             <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง' : '✍️ ลายเซ็นช่าง'}</button>
                                             <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
@@ -3099,6 +3061,7 @@
                         </div>
                         `;
                     })()}
+                    ` : ''}
                 </div>
             `;
         }
