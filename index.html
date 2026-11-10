@@ -95,6 +95,10 @@
                     <i class="fa-solid fa-table"></i>
                     <span>☁️ ซิงค์ Google Sheet</span>
                 </button>
+                <button type="button" onclick="openDiscordModal()" class="bg-[#5865F2] hover:bg-[#4752C4] text-white px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs" title="ตั้งค่าการแจ้งเตือน Discord Webhook ฟรี ไม่จำกัด">
+                    <i class="fa-solid fa-bell"></i>
+                    <span id="discord-badge-text">${discordWebhookUrl ? '🔔 Discord (เชื่อมต่อแล้ว)' : '🔔 แจ้งเตือน Discord (ฟรี)'}</span>
+                </button>
                 <button type="button" onclick="openMasterDataModal('brands')" class="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1.5 cursor-pointer">
                     <i class="fa-solid fa-sliders"></i>
                     <span>⚙️ แก้ไขข้อมูลตั้งต้น</span>
@@ -141,6 +145,7 @@
 
         const GAS_CODE_TEMPLATE = "// ============================================================================\n// SAHA KIM MOTOR V12.1 - GOOGLE SHEETS + APPSHEET + LINE OA NOTIFICATION (Code.gs)\n// วิธีใช้งาน:\n// 1. เปิด Google Sheet -> ไปที่เมนู ส่วนขยาย (Extensions) > Apps Script\n// 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กดบันทึก (ไอคอนแผ่นดิสก์)\n// 3. กดปุ่ม \"ทำให้ใช้งานได้\" (Deploy) > \"จัดการการทำให้ใช้งานได้\" (Manage deployments)\n//    หรือ \"การทำให้ใช้งานได้รายการใหม่\" (New deployment) -> เลือกประเภท \"เว็บแอป\" (Web app)\n//    - ดำเนินการในฐานะ (Execute as): \"ฉัน\" (Me)\n//    - ผู้ที่มีสิทธิ์เข้าถึง (Who has access): \"ทุกคน\" (Anyone)\n// 4. คัดลอก Web App URL (ลงท้ายด้วย /exec) มาวางในหน้าตั้งค่าของ Supervisor\n// ============================================================================\n\nconst SHEET_TICKETS = 'Tickets';\n\nfunction ensureHeaderRow(sheet) {\n  const headers = [\n    'TicketID',\n    'Company',\n    'TaxID',\n    'DocNo',\n    'Contact',\n    'SiteContact',\n    'Location',\n    'Warranty',\n    'ServiceType',\n    'Urgency',\n    'DesiredDate',\n    'ConfirmedDate',\n    'Status',\n    'AssignedTech',\n    'ApprovedBySupervisor',\n    'EquipmentSummary',\n    'CreatedAt',\n    'RawJson'\n  ];\n  if (sheet.getLastRow() === 0) {\n    sheet.appendRow(headers);\n    sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n  } else {\n    const firstCell = String(sheet.getRange(1, 1).getValue() || '').trim();\n    if (firstCell !== 'TicketID') {\n      sheet.getRange(1, 1, 1, 18).setValues([headers]);\n      sheet.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');\n    }\n  }\n}\n\nfunction setupSheets() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  let sheet = ss.getSheetByName(SHEET_TICKETS);\n  if (!sheet) {\n    // หากแผ่นงานแรกสุดยังว่างเปล่า ให้เปลี่ยนชื่อเป็น Tickets ทันทีเพื่อให้ผู้ใช้เห็นข้อมูลในหน้าแรกเลย\n    const firstSheet = ss.getSheets()[0];\n    if (firstSheet && firstSheet.getLastRow() === 0) {\n      firstSheet.setName(SHEET_TICKETS);\n      sheet = firstSheet;\n    } else {\n      sheet = ss.insertSheet(SHEET_TICKETS, 0);\n    }\n  }\n  ensureHeaderRow(sheet);\n  try {\n    ss.setActiveSheet(sheet);\n    ss.moveActiveSheet(1);\n  } catch (e) {}\n  return sheet;\n}\n\n// ฟังก์ชันลดขนาดรูปภาพ Base64 ใน RawJson เพื่อไม่ให้เกินลิมิต 50,000 ตัวอักษรต่อเซลล์ของ Google Sheets\nfunction sanitizeTicketForSheet(t) {\n  try {\n    const copy = JSON.parse(JSON.stringify(t));\n    if (Array.isArray(copy.equipmentList)) {\n      copy.equipmentList = copy.equipmentList.map(function(eq) {\n        if (Array.isArray(eq.beforePhotos)) {\n          eq.beforePhotos = eq.beforePhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600'\n              : p;\n          });\n        }\n        if (Array.isArray(eq.afterPhotos)) {\n          eq.afterPhotos = eq.afterPhotos.map(function(p) {\n            return (typeof p === 'string' && (p.indexOf('data:') === 0 || p.indexOf('blob:') === 0 || p.length > 800))\n              ? 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=600'\n              : p;\n          });\n        }\n        return eq;\n      });\n    }\n    return copy;\n  } catch (e) {\n    return t;\n  }\n}\n\nfunction doGet(e) {\n  const sheet = setupSheets();\n  const rows = sheet.getDataRange().getValues();\n  const tickets = [];\n  for (let i = 1; i < rows.length; i++) {\n    const rawJson = rows[i][17];\n    if (rawJson) {\n      try {\n        tickets.push(JSON.parse(rawJson));\n      } catch (err) {}\n    }\n  }\n  return ContentService\n    .createTextOutput(JSON.stringify({\n      status: 'ok',\n      tickets: tickets\n    }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    const payload = JSON.parse(e.postData.contents);\n    let writtenCount = 0;\n    if (Array.isArray(payload.tickets)) {\n      const sheet = setupSheets();\n      const tickets = payload.tickets;\n\n      if (sheet.getLastRow() > 1) {\n        sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).clearContent();\n      }\n\n      const rowsToWrite = tickets.map(function(t) {\n        const cleanT = sanitizeTicketForSheet(t);\n        const eqSummary = (cleanT.equipmentList || []).map(function(eq) {\n          return eq.type + ' (' + eq.brand + ' ' + (eq.model || '') + '): ' + eq.symptom;\n        }).join(' | ');\n\n        const techDisplay = cleanT.leadTech\n          ? (cleanT.assignedTech || '') + ' (หน.ช่าง: ' + cleanT.leadTech + ')'\n          : (cleanT.assignedTech || '');\n\n        let rawJsonStr = JSON.stringify(cleanT);\n        if (rawJsonStr.length > 48000) {\n          rawJsonStr = rawJsonStr.substring(0, 48000);\n        }\n\n        return [\n          String(cleanT.id || '').substring(0, 500),\n          String(cleanT.company || '').substring(0, 1000),\n          String(cleanT.taxId || '').substring(0, 500),\n          String(cleanT.docNo || '').substring(0, 500),\n          String(cleanT.contact || '').substring(0, 1000),\n          String(cleanT.siteContact || '').substring(0, 1000),\n          String(cleanT.location || '').substring(0, 2000),\n          String(cleanT.warranty || '').substring(0, 500),\n          String(cleanT.serviceType || '').substring(0, 500),\n          String(cleanT.urgency || '').substring(0, 500),\n          String(cleanT.desiredDate || '').substring(0, 500),\n          String(cleanT.confirmedDate || '').substring(0, 500),\n          String(cleanT.status || '').substring(0, 500),\n          String(techDisplay).substring(0, 1000),\n          String(cleanT.approvedBySupervisor || '').substring(0, 1000),\n          String(eqSummary).substring(0, 5000),\n          String(cleanT.createdAt || '').substring(0, 500),\n          rawJsonStr\n        ];\n      });\n\n      if (rowsToWrite.length > 0) {\n        sheet.getRange(2, 1, rowsToWrite.length, 18).setValues(rowsToWrite);\n        writtenCount = rowsToWrite.length;\n      }\n      SpreadsheetApp.flush();\n    }\n\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'ok', updatedRows: writtenCount, updatedAt: new Date().toISOString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService\n      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}";
         let gasWebAppUrl = localStorage.getItem('sahakim_gas_url') || "";
+        let discordWebhookUrl = localStorage.getItem('sahakim_discord_webhook_url') || "";
         try {
             localStorage.removeItem('sahakim_line_token');
             localStorage.removeItem('sahakim_line_target');
@@ -346,7 +351,7 @@
         });
         const CLOUD_SYNC_API_URL = (window.location.origin.includes('run.app') || window.location.origin.includes('localhost'))
             ? (window.location.origin + '/api/online/state')
-            : 'https://ais-pre-brppajwjfafqftfzmicbfo-297429063525.asia-southeast1.run.app/api/online/state';
+            : 'https://ais-pre-5eh5dh3pj3veiystie2rr7-441257203027.asia-northeast1.run.app/api/online/state';
 
         function getEquipmentMasters() {
             return Array.from(new Set([...masterEquipmentTypes, ...customEquipList, "ETC. (กรอกเพิ่มเองได้)"]));
@@ -444,18 +449,13 @@
         ];
 
         function isDemoTechnician(tc) {
-            if (!tc || !tc.name) return false;
-            const n = String(tc.name).trim();
-            return n.includes('วิชัย') || n.includes('สมชาย') || n.includes('ประเสริฐ');
+            if (!tc) return false;
+            return Boolean(tc.isDemo || (tc.name && String(tc.name).includes('[DEMO]')));
         }
 
         function isDemoTicket(t) {
             if (!t) return false;
-            const id = String(t.id || '').trim();
-            const comp = String(t.company || '').trim();
-            if (id === 'SKM-69-001' || id === 'SKM-69-002' || id === 'SKM-69-003') return true;
-            if (comp.includes('ตัวอย่าง') || comp.includes('เดโม') || comp.includes('Demo')) return true;
-            return false;
+            return Boolean(t.isDemo || (t.company && (String(t.company).includes('[DEMO]') || String(t.company).includes('ตัวอย่างระบบ (DEMO)'))));
         }
 
         let knowledgeTemplates = safeJsonParse(localStorage.getItem('sahakim_knowledge_templates'), [{"id":"TPL-EASA-01","title":"มอเตอร์ขดลวดไหม้ / ค่าฉนวนต่ำ (EASA AR100 & IEEE 43)","category":"MOTOR","sourceRef":"EASA AR100 / IEEE Std 43 / BULL POWER & BROOK CROMPTON Manual","analysis":"วัดค่าความต้านทานฉนวน (Insulation Resistance) ด้วย Megger 500VDC ได้ต่ำกว่าเกณฑ์มาตรฐาน IEEE 43 (< 100 MΩ) และพบกลิ่นไหม้ที่ขดลวดสเตเตอร์เนื่องจากความร้อนสะสมเกินพิกัด (Thermal Overload Class F/H)","cause":"แรงดันไฟฟ้าไม่สมดุล (Voltage Unbalance > 1%) หรือเกิดภาวะ Single Phasing / ทำงานเกินพิกัดกระแสต่อเนื่อง (Overload) ร่วมกับการระบายความร้อนไม่เพียงพอ","correctiveAction":"พันขดลวดสเตเตอร์ใหม่ด้วยลวดทองแดงเคลือบน้ำยา Class H อาบวานิชอบแห้งตามมาตรฐาน EASA AR100 เปลี่ยนตลับลูกปืนทั้งด้าน DE/NDE และทดสอบเดินตัวเปล่า (No-Load Test) วัดกระแสทั้ง 3 เฟสให้สมดุล","recommendedChecklist":["Measure 3-Phase Supply Voltage Unbalance (< 1% per NEMA MG1)","Polarization Index (PI) & Megger Insulation Test at 500/1000 VDC"]},{"id":"TPL-PUMP-01","title":"ปั๊มเกิดโพรงอากาศ / เสียงดังคล้ายกรวดและแรงดันตก (Cavitation)","category":"PUMP","sourceRef":"Karassik's Pump Handbook (4th Ed.) / Hydraulic Institute / STAC & UNOMACH Guide","analysis":"เกิดเสียงดังรัวคล้ายเม็ดกรวดกระทบภายในเรือนปั๊ม (Volute Casing) ร่วมกับค่าความสั่นสะเทือนสูงผิดปกติ และเข็มเกจวัดแรงดันด้านส่ง (Discharge Pressure) สั่นแกว่งเนื่องจากเกิดภาวะโพรงอากาศ (Suction Cavitation: NPSHa < NPSHr)","cause":"ท่อทางดูด (Suction Line) หรือ Strainer อุดตันทำให้เกิด Pressure Drop สูง หรือระดับน้ำฝั่งดูดต่ำกว่าค่าออกแบบ (Insufficient Submergence / High Suction Lift)","correctiveAction":"ถอดล้างทำความสะอาด Y-Strainer และตรวจสอบวาล์วทางดูด ตรวจสอบรอยรั่วอากาศฝั่งท่อดูด (Suction Air Ingress) ตรวจสอบสภาพใบพัด (Impeller) หากสึกกร่อนมากให้เปลี่ยนใบพัดและ Wear Ring ใหม่พร้อมทำ Dynamic Balancing ตามมาตรฐาน ISO 1940 G6.3","recommendedChecklist":["Suction Compound Gauge Vacuum Reading & Strainer Differential Check","Impeller Vane Pitting & Wear Ring Radial Clearance Measurement"]},{"id":"TPL-PUMP-02","title":"ซีลกันรั่วซึม / ตลับลูกปืนร้อนและสั่นสะเทือนสูง (Misalignment & Seal Failure)","category":"PUMP","sourceRef":"Karassik's Pump Handbook / VARISCO & FYBROC Maintenance Manual / ISO 10816","analysis":"พบการรั่วซึมของของเหลวออกทางชุด Mechanical Seal อย่างต่อเนื่อง และอุณหภูมิเสื้อลูกปืน (Bearing Housing) สูงเกิน 85°C ร่วมกับค่า Vibration เกินเกณฑ์มาตรฐาน ISO 10816","cause":"เกิดจากการเยื้องศูนย์ของเพลาปั๊มและมอเตอร์ (Angular / Parallel Shaft Misalignment) หรือเกิดภาวะเดินปั๊มตัวเปล่าโดยไม่มีน้ำหล่อเลี้ยงซีล (Dry Running / Thermal Shock)","correctiveAction":"ถอดเปลี่ยนชุด Mechanical Seal (SiC/SiC/Viton) และตลับลูกปืนใหม่ ตรวจสอบค่าความคดของเพลา (Shaft Runout TIR ≤ 0.05 mm) และทำ Laser Shaft Alignment หน้างานให้ได้ค่าความคลาดเคลื่อนไม่เกิน ±0.05 mm พร้อมตรวจสอบความเครียดท่อ (Pipe Strain)","recommendedChecklist":["Shaft Runout (TIR) & Coupling Angular/Parallel Alignment Check","Pipe Strain Check on Suction & Discharge Flanges"]},{"id":"TPL-SEWAGE-01","title":"ปั๊มจุ่มน้ำเสียตัด Overload / ใบพัดติดขัดและน้ำเข้าห้องน้ำมัน","category":"SEWAGE","sourceRef":"Submersible Sewage Pump Handbook / UNOMACH & VARISCO Troubleshooting Guide","analysis":"เบรกเกอร์และ Overload Relay ทริปทันทีเมื่อสั่งสตาร์ท ตรวจพบเศษขยะพันติดใบพัด (Impeller Jamming) และพบน้ำปนเปื้อนในห้องน้ำมันซีล (Oil Chamber Emulsified) ทำให้ซีลตัวล่างสึกหรอ","cause":"ขยะเส้นใยยาวหรือของแข็งเกินขนาดผ่านเข้าใบพัดทำให้เพลาล็อก (Locked Rotor Current สูง 6-7 เท่า) และทำลายผิวหน้าสัมผัส Mechanical Seal","correctiveAction":"ถอดล้างสิ่งอุดตันในเรือนปั๊มและใบพัด เปลี่ยนชุด Double Mechanical Seal และถ่ายเปลี่ยนน้ำมันหล่อลื่น Food Grade / Turbine Oil VG32 ในห้องซีล อบไล่ความชื้นขดลวดและอัดอีพ็อกซี่ที่ขั้วสายไฟ (Cable Entry) ใหม่","recommendedChecklist":["Oil Chamber Dielectric & Moisture Inspection","Submersible Cable Insulation & Float Switch Level Check"]},{"id":"TPL-CTRL-01","title":"ตู้คอนโทรลทริป / Magnetic Contactor หน้าสัมผัสไหม้ / VFD Fault","category":"CONTROL","sourceRef":"IEC 60947-4-1 / EASA Electrical Testing & Control Panel Troubleshooting","analysis":"ตรวจพบรอยอาร์คและหน้าสัมผัส (Contact Tips) ของ Magnetic Contactor สึกหรอไม่เท่ากัน ส่งผลให้แรงดันไฟฟ้าตกคร่อมเฟสและทำให้ Thermal Overload หรือ VFD แจ้งเตือน Overcurrent / Phase Loss","cause":"เกิดจากการสตาร์ท-หยุดบ่อยครั้ง (Frequent Jogging/Starting) หรือขั้วต่อสายไฟหลวมทำให้เกิดความร้อนสูงที่จุดต่อ (Loose Terminal Hot Spot)","correctiveAction":"เปลี่ยนชุด Magnetic Contactor และ Overload Relay ให้ตรงตามพิกัดกระแส (AC-3 Duty) ขันกวดขั้วต่อสายกำลังทั้งหมดตามค่า Torque มาตรฐาน ตั้งค่าพารามิเตอร์ Ramp-up/Ramp-down และ Current Limit ใน VFD/Soft Starter ใหม่","recommendedChecklist":["Contactor Contact Voltage Drop & Phase Balance Test","Overload Relay Trip Current Setting vs Motor Nameplate FLA"]}]);
@@ -474,7 +474,7 @@
             }));
         try { localStorage.setItem('sahakim_technicians', JSON.stringify(initialTechs)); } catch(e) {}
         
-        let savedTickets = localStorage.getItem('sahakim_tickets_v121');
+        let savedTickets = localStorage.getItem('sahakim_tickets_v121') || localStorage.getItem('sahakim_tickets');
         const INITIAL_DEMO_TICKETS = [];
         let parsedSaved = savedTickets ? safeJsonParse(savedTickets, null) : null;
         let initialTickets = (Array.isArray(parsedSaved) ? parsedSaved : INITIAL_DEMO_TICKETS).filter(t => !isDemoTicket(t));
@@ -697,6 +697,16 @@
             }
         }
 
+        function updateDiscordBadge() {
+            const badge = document.getElementById('discord-badge-text');
+            if (!badge) return;
+            if (discordWebhookUrl) {
+                badge.textContent = '🔔 Discord (เชื่อมต่อแล้ว)';
+            } else {
+                badge.textContent = '🔔 แจ้งเตือน Discord (ฟรี)';
+            }
+        }
+
         function formatTicketLineMessage(t, eventHeading) {
             const portalUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
                 ? window.location.href
@@ -892,6 +902,72 @@
                 } catch (e) {
                     console.warn('Google Sheet Sync warning:', e);
                 }
+            }
+        }
+
+        async function sendDiscordNotificationStandalone(ticket, eventHeading) {
+            if (!discordWebhookUrl || !discordWebhookUrl.trim().startsWith('https://discord.com/api/webhooks/')) return;
+            try {
+                const portalUrl = window.location.href.startsWith('http') && !window.location.href.includes('localhost')
+                    ? window.location.href
+                    : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+                const targetTicket = ticket || (state.tickets && state.tickets[0]);
+                if (!targetTicket) return;
+
+                const colorMap = {
+                    NEW: 16348438,
+                    ASSIGNED: 2450411,
+                    INSPECTION: 165063,
+                    REPAIRING: 14251782,
+                    PENDING_PARTS_APPROVAL: 9647082,
+                    PENDING_SUPERVISOR_APPROVAL: 9647082,
+                    CUSTOMER_ACCEPTANCE: 366185,
+                    CLOSE: 1096065,
+                    REJECTED: 14427686
+                };
+                const color = colorMap[targetTicket.status] || 4674921;
+
+                const eqSummary = (targetTicket.equipmentList || [])
+                    .map(eq => '• ' + (eq.type || 'อุปกรณ์') + ' (' + (eq.brand || '-') + ' ' + (eq.model || '-') + ') - ' + (eq.symptom || '-'))
+                    .join('\n');
+
+                let totalPartsPrice = 0;
+                (targetTicket.equipmentList || []).forEach(eq => {
+                    (eq.parts || []).forEach(p => {
+                        totalPartsPrice += Number(p.total) || (Number(p.qty) || 0) * (Number(p.price) || 0);
+                    });
+                });
+
+                const fields = [
+                    { name: '📌 สถานะใบงาน', value: '[' + targetTicket.status + ']', inline: true },
+                    { name: '🚨 ความเร่งด่วน', value: targetTicket.urgency || 'ปกติ', inline: true },
+                    { name: '🏢 บริษัท / ลูกค้า', value: targetTicket.company || '-', inline: true },
+                    { name: '📍 หน้างาน', value: targetTicket.location || '-', inline: true },
+                    { name: '👷 ช่างผู้ปฏิบัติงาน', value: targetTicket.assignedTech || 'ยังไม่ระบุช่าง', inline: true },
+                    { name: '📅 วันนัดหมาย', value: targetTicket.confirmedDate || targetTicket.desiredDate || '-', inline: true },
+                    { name: '💰 ยอดอะไหล่', value: totalPartsPrice.toLocaleString() + ' THB', inline: true }
+                ];
+
+                const payload = {
+                    content: eventHeading ? ('🔔 **' + eventHeading + '**') : '🔔 **[แจ้งเตือนระบบงานซ่อม - สหคิมมอเตอร์]**',
+                    embeds: [{
+                        title: '📋 ใบงาน: ' + targetTicket.id + (targetTicket.docNo ? (' (' + targetTicket.docNo + ')') : ''),
+                        description: eqSummary ? ('🔧 **รายการอุปกรณ์:**\n' + eqSummary) : undefined,
+                        url: portalUrl,
+                        color: color,
+                        fields: fields,
+                        footer: { text: 'SAHA KIM MOTOR CO., LTD. · Service Management System V12.1' },
+                        timestamp: new Date().toISOString()
+                    }]
+                };
+
+                await fetch(discordWebhookUrl.trim(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (err) {
+                console.warn('Discord dispatch error:', err);
             }
         }
 
@@ -1393,6 +1469,12 @@
             }
 
             syncToGoogleSheet(lineNotifyText);
+            if (lineNotifyText && discordWebhookUrl) {
+                const firstLine = lineNotifyText.indexOf('\n') !== -1 ? lineNotifyText.slice(0, lineNotifyText.indexOf('\n')) : lineNotifyText;
+                const heading = firstLine.replace(/[📢🔔🚨✅👷🔄🎉✍️⏳\[\]]/g, '').trim();
+                let matched = state.tickets.find(tk => lineNotifyText.includes(tk.id) || (tk.docNo && lineNotifyText.includes(tk.docNo)));
+                sendDiscordNotificationStandalone(matched || state.tickets[0], heading);
+            }
             pushToCloudSyncServer('STATE_UPDATED');
         }
 
@@ -1530,6 +1612,162 @@
                 </div>
             `;
             document.body.appendChild(modalBg);
+        }
+
+        function openTicketQrModal(ticketId) {
+            const t = state.tickets.find(function(x) { return x.id === ticketId; });
+            if (!t) return;
+            const baseUrl = (window.location.href.startsWith('http') && !window.location.href.includes('localhost'))
+                ? window.location.href.split('?')[0]
+                : 'https://2020skmproduct-service.github.io/sahakim-service-portal/';
+            const ticketTrackingUrl = baseUrl + '?ticketId=' + encodeURIComponent(t.id);
+            const qrApiUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=10&data=' + encodeURIComponent(ticketTrackingUrl);
+            
+            let existing = document.getElementById('ticket-qr-modal');
+            if (existing) existing.remove();
+
+            let modalBg = document.createElement('div');
+            modalBg.id = 'ticket-qr-modal';
+            modalBg.className = 'print-modal-root fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 overflow-y-auto';
+            modalBg.innerHTML = `
+                <div id="ticket-qr-card-area" class="print-modal-content bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4 text-center text-xs sm:text-sm">
+                    <div class="flex justify-between items-center border-b pb-2 no-print">
+                        <div class="text-left">
+                            <h3 class="font-bold text-base text-slate-900"><i class="fa-solid fa-qrcode text-indigo-600 mr-1.5"></i> QR Code ติดตามงาน</h3>
+                            <p class="text-[11px] text-slate-500 font-mono">เลขที่ใบงาน: ${t.id}</p>
+                        </div>
+                        <button onclick="document.getElementById('ticket-qr-modal').remove()" class="text-xl font-bold text-slate-400 hover:text-slate-700 cursor-pointer no-print">&times;</button>
+                    </div>
+                    
+                    <div class="border-2 border-slate-900 rounded-2xl p-5 bg-slate-50 space-y-2 text-left">
+                        <div class="flex items-center justify-between border-b border-slate-200 pb-2">
+                            <div>
+                                <p class="text-[10px] font-bold text-orange-600 tracking-wider">SAHA KIM MOTOR</p>
+                                <p class="text-xs font-bold text-slate-800">ป้ายประจำอุปกรณ์ / ติดตามสถานะงานซ่อม</p>
+                            </div>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-indigo-100 text-indigo-800">${t.id}</span>
+                        </div>
+                        <div class="py-2 text-center">
+                            <div class="bg-white p-3 rounded-xl border border-slate-200 inline-block mx-auto shadow-sm">
+                                <img crossorigin="anonymous" src="${qrApiUrl}" alt="QR Code Ticket ${t.id}" class="w-48 h-48 mx-auto" />
+                            </div>
+                            <p class="text-[11px] font-medium text-slate-500 mt-1">สแกนด้วยกล้องมือถือ เพื่อดูสถานะและรายงานใบงานนี้</p>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-xl border border-slate-200 text-xs space-y-1">
+                            <p><span class="text-slate-500">ลูกค้า:</span> <strong class="text-slate-900">${t.company}</strong></p>
+                            <p><span class="text-slate-500">อุปกรณ์:</span> <span class="font-medium">${t.equipmentList ? t.equipmentList.map(function(e) { return e.type + ' ' + (e.model || ''); }).join(', ') : '-'}</span></p>
+                            <p><span class="text-slate-500">สถานะ:</span> <span class="font-bold text-orange-600">${t.status}</span></p>
+                            <p><span class="text-slate-500">ช่างดูแล:</span> ${t.assignedTech || 'อยู่ระหว่างจัดสรร'}</p>
+                        </div>
+                        <p class="text-[10px] text-slate-400 break-all text-center pt-1 font-mono">${ticketTrackingUrl}</p>
+                    </div>
+                    
+                    <div class="flex flex-wrap justify-center gap-2 pt-2 no-print">
+                        <button type="button" onclick="navigator.clipboard.writeText('${ticketTrackingUrl}'); alert('คัดลอกลิงก์ติดตามใบงาน ${t.id} เรียบร้อย!');" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl font-bold cursor-pointer"><i class="fa-solid fa-copy mr-1"></i> คัดลอกลิงก์</button>
+                        <a href="${qrApiUrl}" download="QR-${t.id}.png" target="_blank" class="bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-2 rounded-xl font-bold cursor-pointer inline-flex items-center"><i class="fa-solid fa-download mr-1"></i> ดาวน์โหลด QR</a>
+                        <button type="button" onclick="window.print()" class="bg-slate-200 hover:bg-slate-300 text-slate-800 px-3.5 py-2 rounded-xl font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> พิมพ์ป้าย</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modalBg);
+        }
+
+        function openDiscordModal() {
+            let existing = document.getElementById('standalone-discord-modal');
+            if (existing) existing.remove();
+
+            let modalBg = document.createElement('div');
+            modalBg.id = 'standalone-discord-modal';
+            modalBg.className = 'fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto';
+            modalBg.innerHTML = `
+                <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 p-5 space-y-4 text-xs sm:text-sm">
+                    <div class="flex justify-between items-center border-b pb-3 border-slate-200">
+                        <div class="flex items-center gap-2">
+                            <span class="w-8 h-8 rounded-lg bg-[#5865F2] text-white flex items-center justify-center text-sm font-bold shadow-sm">
+                                <i class="fa-solid fa-bell"></i>
+                            </span>
+                            <div>
+                                <h3 class="font-bold text-base text-slate-900">ตั้งค่าการแจ้งเตือน Discord Webhook</h3>
+                                <p class="text-[11px] text-slate-500">ฟรี 100% ไม่จำกัดจำนวนข้อความ แจ้งเตือนเข้าห้องแชทของทีมทันที</p>
+                            </div>
+                        </div>
+                        <button onclick="document.getElementById('standalone-discord-modal').remove()" class="text-xl font-bold text-slate-400 hover:text-slate-600 cursor-pointer">&times;</button>
+                    </div>
+
+                    <div class="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-900 space-y-1">
+                        <div class="font-bold">💡 วิธีสร้าง Discord Webhook ใน 3 ขั้นตอน:</div>
+                        <ol class="list-decimal list-inside space-y-0.5 text-slate-700">
+                            <li>เปิด Discord ไปที่ Server ของทีม &gt; กดรูปเฟือง ⚙️ ข้างห้องแชทที่ต้องการ</li>
+                            <li>ไปที่ <strong>Integrations (การรวมระบบ)</strong> &gt; <strong>Webhooks</strong> &gt; <strong>New Webhook</strong></li>
+                            <li>กด <strong>Copy Webhook URL</strong> แล้วนำมาวางในช่องด้านล่าง</li>
+                        </ol>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="block font-bold text-slate-800">วาง Discord Webhook URL:</label>
+                        <input type="url" id="standalone-discord-input" value="${discordWebhookUrl || ''}" placeholder="https://discord.com/api/webhooks/..." class="w-full border rounded-xl p-2.5 font-mono text-xs focus:ring-2 focus:ring-[#5865F2] outline-none" />
+                    </div>
+
+                    <div id="discord-test-status" class="hidden p-2.5 rounded-xl border text-xs"></div>
+
+                    <div class="flex flex-wrap justify-between items-center gap-2 pt-2 border-t border-slate-200">
+                        <button type="button" onclick="document.getElementById('standalone-discord-modal').remove()" class="px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-xl font-bold cursor-pointer">ปิด</button>
+                        <div class="flex gap-2">
+                            <button type="button" onclick="testDiscordWebhookStandalone()" class="bg-slate-100 hover:bg-slate-200 text-slate-800 border px-3.5 py-2 rounded-xl font-bold cursor-pointer"><i class="fa-solid fa-paper-plane mr-1 text-[#5865F2]"></i> ทดสอบส่งข้อความ</button>
+                            <button type="button" onclick="saveDiscordWebhookStandalone()" class="bg-[#5865F2] hover:bg-[#4752C4] text-white px-4 py-2 rounded-xl font-bold cursor-pointer shadow-sm"><i class="fa-solid fa-check mr-1"></i> บันทึก</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modalBg);
+        }
+
+        async function saveDiscordWebhookStandalone() {
+            const inp = document.getElementById('standalone-discord-input');
+            const val = inp ? inp.value.trim() : '';
+            if (val && !val.startsWith('https://discord.com/api/webhooks/')) {
+                alert('⚠️ URL ไม่ถูกต้อง ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/...');
+                return;
+            }
+            discordWebhookUrl = val;
+            if (val) {
+                localStorage.setItem('sahakim_discord_webhook_url', val);
+            } else {
+                localStorage.removeItem('sahakim_discord_webhook_url');
+            }
+            updateDiscordBadge();
+            alert('✅ บันทึกการตั้งค่า Discord Webhook เรียบร้อยแล้ว!');
+            const modal = document.getElementById('standalone-discord-modal');
+            if (modal) modal.remove();
+        }
+
+        async function testDiscordWebhookStandalone() {
+            const inp = document.getElementById('standalone-discord-input');
+            const val = inp ? inp.value.trim() : '';
+            if (!val || !val.startsWith('https://discord.com/api/webhooks/')) {
+                alert('⚠️ กรุณากรอก Discord Webhook URL ให้ถูกต้องก่อนกดทดสอบ');
+                return;
+            }
+            const statusEl = document.getElementById('discord-test-status');
+            if (statusEl) {
+                statusEl.className = 'p-2.5 rounded-xl border text-xs bg-blue-50 border-blue-200 text-blue-800';
+                statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังส่งข้อความทดสอบเข้า Discord...';
+                statusEl.classList.remove('hidden');
+            }
+            const originalUrl = discordWebhookUrl;
+            discordWebhookUrl = val;
+            try {
+                await sendDiscordNotificationStandalone(state.tickets[0], '🧪 [ทดสอบการเชื่อมต่อ] ระบบแจ้งเตือนงานซ่อม สหคิมมอเตอร์');
+                if (statusEl) {
+                    statusEl.className = 'p-2.5 rounded-xl border text-xs bg-emerald-50 border-emerald-200 text-emerald-800 font-bold';
+                    statusEl.innerHTML = '<i class="fa-solid fa-check mr-1"></i> ส่งข้อความทดสอบสำเร็จ! โปรดตรวจสอบใน Discord';
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.className = 'p-2.5 rounded-xl border text-xs bg-rose-50 border-rose-200 text-rose-800';
+                    statusEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-1"></i> ส่งไม่สำเร็จ: ' + (err.message || 'เกิดข้อผิดพลาด');
+                }
+            }
         }
 
         function playAlertSound() {
@@ -2192,6 +2430,7 @@
 
         function render() {
             updateGsheetBadge();
+            updateDiscordBadge();
             const syncBarEl = document.getElementById('supervisor-sync-bar-container');
             if (syncBarEl) {
                 syncBarEl.classList.toggle('hidden', state.userRole !== 'SUPERVISOR');
@@ -2378,6 +2617,7 @@
                                     <p class="text-slate-500 text-xs">วันขอช่าง/นัดหมาย: <span class="font-bold text-emerald-600">${t.confirmedDate || t.desiredDate}</span> | สถานที่: ${t.location || '-'} | ช่าง: ${t.assignedTech || 'อยู่ระหว่างจัดสรรช่าง'}</p>
                                 </div>
                                 <div class="flex items-center space-x-2">
+                                    <button onclick="openTicketQrModal('${t.id}')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-qrcode mr-1"></i> QR ติดตามงาน</button>
                                     <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
                                     <button onclick="openSignatureModal('${t.id}', 'customer')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.customerSignature ? '✓ ลายเซ็นรับงานแล้ว' : (t.status === 'CUSTOMER_ACCEPTANCE' ? '✍️ เซ็นตรวจรับงานและปิดจบ' : '✍️ เซ็นตรวจรับงานบนจอ')}</button>
                                 </div>
@@ -3056,6 +3296,7 @@
                                             ${t.assignedTech ? `<button onclick="unassignTicket('${t.id}')" class="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="ปลดช่างออกจากใบงานนี้"><i class="fa-solid fa-user-xmark mr-1"></i> ปลดช่าง</button>` : ''}
                                             <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง' : '✍️ ลายเซ็นช่าง'}</button>
                                             <button onclick="openInternalActionModal('${t.id}')" class="bg-orange-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer"><i class="fa-solid fa-pen-to-square mr-1"></i> ปฏิบัติงาน/วิเคราะห์ AI</button>
+                                            <button onclick="openTicketQrModal('${t.id}')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-2 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="สร้าง QR Code สแกนติดตามงานนี้"><i class="fa-solid fa-qrcode mr-1"></i> QR</button>
                                             <button onclick="openServiceReport('${t.id}')" class="bg-slate-800 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-print mr-1"></i> รายงาน</button>
                                             <button onclick="deleteTicket('${t.id}')" class="bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow cursor-pointer" title="ลบใบงานนี้ออกจากระบบ"><i class="fa-solid fa-trash mr-1"></i> ลบ</button>
                                         </div>
@@ -3922,6 +4163,7 @@
                 <div class="max-w-3xl mx-auto mb-3 flex flex-wrap justify-between items-center gap-2 bg-white p-3.5 rounded-xl border no-print">
                     <button onclick="state.currentView = state.userRole === 'CUSTOMER' ? 'customer_portal' : 'internal_dashboard'; render();" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3.5 py-2 rounded-xl text-xs cursor-pointer"><i class="fa-solid fa-arrow-left mr-1"></i> ย้อนกลับ</button>
                     <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="openTicketQrModal('${t.id}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-qrcode mr-1"></i> QR ติดตามงาน</button>
                         <button onclick="openSignatureModal('${t.id}', 'technician')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-pen-nib mr-1"></i> ${t.technicianSignature ? '✓ ลายเซ็นช่าง (แก้ไข)' : '✍️ ช่างเซ็นชื่อบนหน้าจอ'}</button>
                         <button onclick="openSignatureModal('${t.id}', 'customer')" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-signature mr-1"></i> ${t.customerSignature ? '✓ ลายเซ็นลูกค้า (แก้ไข)' : '✍️ ลูกค้าเซ็นรับงานบนจอ'}</button>
                         <button onclick="downloadPdfById('standalone-service-report-sheet', 'Service-Report-${t.id}.pdf')" class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-2 rounded-xl text-xs shadow cursor-pointer"><i class="fa-solid fa-file-pdf mr-1"></i> บันทึกเป็นไฟล์ PDF (Save PDF)</button>
@@ -3935,9 +4177,15 @@
                             <p class="text-[11px] text-orange-600 font-bold">SAHA KIM MOTOR CO., LTD. (เชี่ยวชาญงาน ใส่ใจบริการ SKM SERVICE)</p>
                             <p class="text-[10px] text-slate-500">บริการซ่อม บำรุงรักษา และจำหน่ายปั๊มน้ำ มอเตอร์ Blower อุตสาหกรรม</p>
                         </div>
-                        <div class="text-right bg-slate-50 p-2.5 rounded-lg border">
-                            <h2 class="text-xs sm:text-sm font-extrabold text-orange-600">SERVICE REPORT</h2>
-                            <p class="text-[11px] font-bold">เลขที่ใบงาน: ${t.id}</p>
+                        <div class="flex items-center gap-2">
+                            <div onclick="openTicketQrModal('${t.id}')" class="bg-white border border-slate-200 p-1 rounded-lg text-center cursor-pointer" title="สแกนเพื่อเปิดดูใบงานนี้">
+                                <img crossorigin="anonymous" src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&margin=2&data=${encodeURIComponent((window.location.href.startsWith('http') && !window.location.href.includes('localhost') ? window.location.href.split('?')[0] : 'https://2020skmproduct-service.github.io/sahakim-service-portal/') + '?ticketId=' + t.id)}" class="w-12 h-12 mx-auto" />
+                                <span class="text-[9px] text-indigo-700 font-bold block">สแกนติดตาม</span>
+                            </div>
+                            <div class="text-right bg-slate-50 p-2.5 rounded-lg border">
+                                <h2 class="text-xs sm:text-sm font-extrabold text-orange-600">SERVICE REPORT</h2>
+                                <p class="text-[11px] font-bold">เลขที่ใบงาน: ${t.id}</p>
+                            </div>
                         </div>
                     </div>
 
@@ -4088,6 +4336,19 @@
         render();
         pullFromCloudSyncServer(false);
         if (gasWebAppUrl) loadFromGoogleSheet(false);
+
+        try {
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetId = urlParams.get('ticketId') || urlParams.get('job') || urlParams.get('id');
+            if (targetId) {
+                const found = state.tickets.find(function(x) { return x.id.toLowerCase() === targetId.trim().toLowerCase(); });
+                if (found) {
+                    setTimeout(function() {
+                        openServiceReport(found.id);
+                    }, 250);
+                }
+            }
+        } catch(e) {}
     </script>
 </body>
 </html>
