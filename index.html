@@ -340,8 +340,9 @@
             phone: '02-XXX-XXXX',
             tagline: 'บริการซ่อม บำรุงรักษา และจำหน่ายปั๊มน้ำ มอเตอร์ Blower, Gen Set, Sewage, Aerator และระบบควบคุมอุตสาหกรรม'
         });
-        const CLOUD_SYNC_API_URL = (window.location.origin.includes('run.app') || window.location.origin.includes('localhost'))
-            ? (window.location.origin + '/api/online/state')
+        const _locOrigin = (window.location && typeof window.location.origin === 'string') ? window.location.origin : '';
+        const CLOUD_SYNC_API_URL = (_locOrigin.includes('run.app') || _locOrigin.includes('localhost') || _locOrigin.includes('127.0.0.1'))
+            ? (_locOrigin + '/api/online/state')
             : 'https://ais-pre-brppajwjfafqftfzmicbfo-297429063525.asia-southeast1.run.app/api/online/state';
 
         function getEquipmentMasters() {
@@ -3055,7 +3056,7 @@
                     </div>
                     ` : ''}
 
-                    ${(() => {
+                    ${(internalActiveTab === 'tickets' || internalActiveTab === 'all') ? (() => {
                         const myTechName = state.loggedInTech ? state.loggedInTech.name : '';
                         const myAssignedCount = state.tickets.filter(t => myTechName && (t.assignedTech === myTechName || (t.assignedTech && t.assignedTech.includes(myTechName)))).length;
                         const availableJobsCount = state.tickets.filter(t => (!t.assignedTech || t.assignedTech === 'ยังไม่ระบุ' || t.assignedTech === '') && (t.status === 'NEW' || t.status === 'ASSIGNED')).length;
@@ -3155,8 +3156,7 @@
                             </div>
                         </div>
                         `;
-                    })()}
-                    ` : ''}
+                    })() : ''}
                 </div>
             `;
         }
