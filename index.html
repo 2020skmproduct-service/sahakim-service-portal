@@ -555,8 +555,22 @@
                     if (Array.isArray(idbData.tickets)) {
                         const cleanedIdbTickets = idbData.tickets.filter(t => !isDemoTicket(t));
                         if (cleanedIdbTickets.length < idbData.tickets.length) hadDemoInIdb = true;
-                        if (cleanedIdbTickets.length > 0 && cleanedIdbTickets.length >= state.tickets.length) {
-                            state.tickets = cleanedIdbTickets;
+                        const currentIds = new Set((state.tickets || []).map(t => t.id));
+                        const mergedById = [...(state.tickets || [])];
+                        let restoredCount = 0;
+                        cleanedIdbTickets.forEach(it => {
+                            if (it && it.id && !currentIds.has(it.id)) {
+                                mergedById.push(it);
+                                currentIds.add(it.id);
+                                restoredCount++;
+                            } else if (it && it.id && currentIds.has(it.id)) {
+                                // Prefer IndexedDB copy when it retains richer photos
+                                const idx = mergedById.findIndex(x => x.id === it.id);
+                                if (idx >= 0) mergedById[idx] = it;
+                            }
+                        });
+                        if (mergedById.length > 0 && (restoredCount > 0 || state.tickets.length === 0)) {
+                            state.tickets = mergedById;
                             updated = true;
                         }
                     }
@@ -571,7 +585,7 @@
                     if (idbData.masterBrands) masterBrands = idbData.masterBrands;
                     if (idbData.masterEquipmentTypes) masterEquipmentTypes = idbData.masterEquipmentTypes;
                     if (idbData.companyProfile) companyProfile = idbData.companyProfile;
-                    if (hadDemoInIdb) {
+                    if (hadDemoInIdb || updated) {
                         persistState();
                     }
                     if (updated) {
@@ -1154,27 +1168,37 @@
                 if (data && Array.isArray(data.tickets)) {
                     const cleanSheetTickets = data.tickets.filter(t => !isDemoTicket(t));
                     const hadDemoRows = cleanSheetTickets.length < data.tickets.length;
-                    if (cleanSheetTickets.length > 0) {
-                        state.tickets = cleanSheetTickets;
+                    const sheetIds = new Set(cleanSheetTickets.map(t => t.id));
+                    const localOnly = (state.tickets || []).filter(t => !sheetIds.has(t.id) && !isDemoTicket(t));
+                    const mergedTickets = [...cleanSheetTickets, ...localOnly];
+
+                    if (cleanSheetTickets.length > 0 || localOnly.length > 0 || hadDemoRows) {
+                        state.tickets = mergedTickets;
                         try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
-                        if (hadDemoRows) {
+                        saveToIndexedDB('full_state', {
+                            tickets: state.tickets,
+                            technicians: state.technicians,
+                            supervisors: state.supervisors,
+                            masterBrands,
+                            masterEquipmentTypes,
+                            companyProfile,
+                            savedAt: new Date().toISOString()
+                        }).catch(() => {});
+                        if (hadDemoRows || localOnly.length > 0) {
                             await syncToGoogleSheet();
                         }
                         render();
-                        if (showMessage) alert(hadDemoRows ? '✅ ดึงข้อมูลและล้างข้อมูล DEMO ออกจาก Google Sheet แล้ว (' + cleanSheetTickets.length + ' ใบงานจริง)' : '✅ ดึงข้อมูลล่าสุดจาก Google Sheet สำเร็จ (' + cleanSheetTickets.length + ' ใบงาน)');
-                    } else if (hadDemoRows) {
-                        state.tickets = (state.tickets || []).filter(t => !isDemoTicket(t));
-                        try { localStorage.setItem('sahakim_tickets_v121', JSON.stringify(state.tickets)); } catch(e) {}
-                        await syncToGoogleSheet();
-                        render();
-                        if (showMessage) alert('✅ ลบข้อมูล DEMO ออกจาก Google Sheet และเว็บแอปเรียบร้อยแล้ว (คงเหลือ ' + state.tickets.length + ' ใบงานจริง)');
+                        if (showMessage) {
+                            alert(
+                                hadDemoRows
+                                    ? '✅ ดึงข้อมูลและล้างข้อมูล DEMO ออกจาก Google Sheet แล้ว (' + state.tickets.length + ' ใบงานจริง)'
+                                    : localOnly.length > 0 && cleanSheetTickets.length === 0
+                                    ? '✅ พบข้อมูลในเครื่อง (' + state.tickets.length + ' ใบงาน) และส่งขึ้นไปบันทึกบน Google Sheet ให้เรียบร้อยแล้ว!'
+                                    : '✅ ดึงและรวมข้อมูลล่าสุดกับ Google Sheet สำเร็จ (' + state.tickets.length + ' ใบงาน)'
+                            );
+                        }
                     } else if (showMessage) {
-                        if (state.tickets.length > 0) {
-                            alert('✅ เชื่อมต่อสำเร็จ แต่ยังไม่มีข้อมูลใน Google Sheet ระบบกำลังส่งข้อมูลปัจจุบัน (' + state.tickets.length + ' ใบงาน) ขึ้นไปบันทึกให้ทันที');
-                            await syncToGoogleSheet();
-                        } else {
-                            alert('✅ เชื่อมต่อ Google Sheet สำเร็จ! (ข้อมูลสะอาดพร้อมใช้งาน 0 ใบงาน)');
-                        }
+                        alert('✅ เชื่อมต่อ Google Sheet สำเร็จ! (ข้อมูลสะอาดพร้อมใช้งาน 0 ใบงาน)');
                     }
                 }
             } catch (e) {
@@ -2382,9 +2406,15 @@
 
         function renderCustomerPortal() {
             const q = (customerLookupQuery || state.customerCompany || '').trim().toLowerCase();
-            const customerTickets = state.tickets.filter(t =>
-                !q ? false : ((t.id || '').toLowerCase().includes(q) || (t.company || '').toLowerCase().includes(q))
-            );
+            const customerTickets = !q
+                ? state.tickets
+                : state.tickets.filter(t =>
+                    (t.id || '').toLowerCase().includes(q) ||
+                    (t.company || '').toLowerCase().includes(q) ||
+                    (t.projectName || '').toLowerCase().includes(q) ||
+                    (t.docNo || '').toLowerCase().includes(q)
+                );
+            const distinctCompanies = Array.from(new Set(state.tickets.map(t => (t.company || '').trim()).filter(Boolean)));
             const scheduleDays = getCustomerScheduleDays();
 
             return `
@@ -2393,14 +2423,25 @@
                         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                             <div>
                                 <span class="bg-orange-500 text-white text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase">SERVICE REQUEST PORTAL</span>
-                                <h2 class="text-xl sm:text-2xl font-bold mt-1">Service Request — ${state.customerCompany}</h2>
+                                <h2 class="text-xl sm:text-2xl font-bold mt-1">Service Request — ${state.customerCompany || (distinctCompanies.length > 0 ? 'ทั้งหมด (' + state.tickets.length + ' งาน)' : '')}</h2>
                                 <p class="text-xs text-slate-300">ตรวจสอบสถานะงานด้วยชื่อบริษัทหรือเลขที่ใบแจ้งซ่อม และเลือกวันขอช่างเบื้องต้นจากตารางงานช่างด้านล่าง</p>
                             </div>
                             <button onclick="app.openCustomerPortal()" class="bg-white text-slate-900 font-bold px-3 py-1.5 rounded-xl text-xs hover:bg-slate-100 shadow cursor-pointer">ค้นหาบริษัท/เลขใบงานอื่น</button>
                         </div>
-                        <div class="bg-slate-800 border border-slate-700 p-3 rounded-xl flex flex-col sm:flex-row gap-2">
-                            <input type="text" id="cust-inline-search" value="${customerLookupQuery || state.customerCompany}" placeholder="พิมพ์ชื่อบริษัท หรือ เลขที่ใบแจ้งซ่อม เช่น SKM-69-001..." class="flex-1 bg-white text-slate-900 rounded-lg px-3 py-2 text-xs sm:text-sm font-medium">
-                            <button type="button" onclick="applyStandaloneCustomerLookup(document.getElementById('cust-inline-search').value); render();" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-magnifying-glass mr-1"></i> ค้นหาสถานะงาน</button>
+                        <div class="bg-slate-800 border border-slate-700 p-3 rounded-xl space-y-2">
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input type="text" id="cust-inline-search" value="${customerLookupQuery || state.customerCompany}" placeholder="พิมพ์ชื่อบริษัท หรือ เลขที่ใบแจ้งซ่อม เช่น SKM-69-001 (เว้นว่างเพื่อดูทั้งหมด)..." class="flex-1 bg-white text-slate-900 rounded-lg px-3 py-2 text-xs sm:text-sm font-medium">
+                                <button type="button" onclick="applyStandaloneCustomerLookup(document.getElementById('cust-inline-search').value); render();" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-xs font-bold cursor-pointer"><i class="fa-solid fa-magnifying-glass mr-1"></i> ค้นหาสถานะงาน</button>
+                            </div>
+                            ${state.tickets.length > 0 ? `
+                                <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                    <span class="text-slate-300 font-semibold">บริษัทที่มีใบงานในระบบ:</span>
+                                    <button type="button" onclick="state.customerCompany = ''; customerLookupQuery = ''; render();" class="px-2.5 py-1 rounded-md font-bold cursor-pointer ${!q ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}">ทั้งหมด (${state.tickets.length})</button>
+                                    ${distinctCompanies.map(comp => `
+                                        <button type="button" onclick="applyStandaloneCustomerLookup(decodeURIComponent('${encodeURIComponent(comp)}')); render();" class="px-2.5 py-1 rounded-md font-bold cursor-pointer ${q === comp.toLowerCase() ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}">${comp}</button>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
                         </div>
                     </div>
 
